@@ -286,7 +286,6 @@ if uploaded_file is not None:
                 status_text.empty()
                 progress_bar.empty()
 
-                st.balloons()
                 st.success("✅ Traduction terminée avec succès!")
 
             except Exception as e:

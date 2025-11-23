@@ -584,7 +584,10 @@ def translate_batch_generic(
             print(f"  WARNING: tokenizer does not have 'tgt_lang' attribute!")
 
         # Récupérer le forced_bos_token_id pour la langue cible
+        # NLLB utilise des tokens spéciaux pour chaque langue
         forced_bos = None
+
+        # Méthode 1 : via lang_code_to_id (NLLB-200)
         if hasattr(tokenizer, "lang_code_to_id"):
             if tgt_code in tokenizer.lang_code_to_id:
                 forced_bos = tokenizer.lang_code_to_id[tgt_code]
@@ -592,8 +595,37 @@ def translate_batch_generic(
             else:
                 print(f"  WARNING: {tgt_code} not found in tokenizer.lang_code_to_id!")
                 print(f"  Available codes sample: {list(tokenizer.lang_code_to_id.keys())[:10]}")
+
+        # Méthode 2 : via convert_tokens_to_ids (fallback)
+        if forced_bos is None:
+            try:
+                # Les tokens de langue NLLB sont de la forme "fra_Latn"
+                forced_bos = tokenizer.convert_tokens_to_ids(tgt_code)
+                if forced_bos != tokenizer.unk_token_id:
+                    print(f"  forced_bos from convert_tokens_to_ids({tgt_code}) = {forced_bos}")
+                else:
+                    forced_bos = None
+            except Exception as e:
+                print(f"  convert_tokens_to_ids failed: {e}")
+
+        # Méthode 3 : essayer avec le code court (ex: "fra" au lieu de "fra_Latn")
+        if forced_bos is None:
+            short_code = tgt_code.split("_")[0]
+            try:
+                forced_bos = tokenizer.convert_tokens_to_ids(short_code)
+                if forced_bos != tokenizer.unk_token_id:
+                    print(f"  forced_bos from short code '{short_code}' = {forced_bos}")
+                else:
+                    forced_bos = None
+            except Exception:
+                pass
+
+        if forced_bos is None:
+            print(f"  ERROR: Could not find forced_bos for {tgt_code}!")
+            print(f"  Tokenizer type: {type(tokenizer)}")
+            print(f"  This will result in incorrect translations!")
         else:
-            print(f"  WARNING: tokenizer does not have 'lang_code_to_id' attribute!")
+            print(f"  ✓ Successfully set forced_bos = {forced_bos} for {tgt_code}")
 
         print(f"[NLLB] src={src_code}, tgt={tgt_code}, forced_bos={forced_bos}")
 

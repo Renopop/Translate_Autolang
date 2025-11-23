@@ -360,6 +360,11 @@ def looks_like_target(text: str, tgt_code: str) -> bool:
     s = (text or "").strip() if isinstance(text, str) else ("" if text is None else str(text)).strip()
     if not s:
         return True
+
+    # Protection contre tgt_code None
+    if not tgt_code:
+        return True
+
     try:
         iso = _detect_iso2_cached(s[:160])
         tgt_iso = tgt_code.split("_")[0][:2]
@@ -372,6 +377,10 @@ def looks_like_target(text: str, tgt_code: str) -> bool:
         return bool(re.search(r"[\u0600-\u06FF]", s))
     if tgt_code == "zho_Hans":
         return bool(re.search(r"[\u4E00-\u9FFF]", s))
+    if tgt_code == "jpn_Jpan":
+        return bool(re.search(r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]", s))
+    if tgt_code == "kor_Hang":
+        return bool(re.search(r"[\uAC00-\uD7AF\u1100-\u11FF]", s))
     if re.search(r"[^\x00-\x7F]", s):
         return False
     return True
@@ -580,6 +589,14 @@ def translate_batch_generic(
     texts, model_cfg, preset="Quality+", extra_gen_kwargs=None
 ):
     """Traduction générique par lots avec backoff OOM"""
+
+    # Protection contre les codes de langue None
+    if not src_code:
+        src_code = "eng_Latn"
+        print(f"[WARNING] src_code was None, defaulting to eng_Latn")
+    if not tgt_code:
+        tgt_code = "fra_Latn"
+        print(f"[WARNING] tgt_code was None, defaulting to fra_Latn")
 
     # ⚠️ IMPORTANT: Configuration du tokenizer AVANT toute utilisation
     print(f"\n[TRANSLATION DEBUG]")

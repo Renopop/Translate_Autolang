@@ -583,13 +583,20 @@ def load_model(model_name: str, device: torch.device, quantization: str = "none"
 
     tokenizer = AutoTokenizer.from_pretrained(resolved, **tp)
 
-    # Configuration de la quantization
-    load_kwargs = {"attn_implementation": "sdpa", **tp}
+    # Configuration de base
+    load_kwargs = {**tp}
+    using_quantization = False
 
     if quantization == "int8" and device.type == "cuda":
         # Quantization int8 avec bitsandbytes
         try:
+            import bitsandbytes as bnb
             from transformers import BitsAndBytesConfig
+
+            print(f"   bitsandbytes version: {bnb.__version__}")
+            print(f"   CUDA available: {torch.cuda.is_available()}")
+            print(f"   CUDA version: {torch.version.cuda}")
+
             quantization_config = BitsAndBytesConfig(
                 load_in_8bit=True,
                 llm_int8_threshold=6.0,
@@ -597,15 +604,27 @@ def load_model(model_name: str, device: torch.device, quantization: str = "none"
             )
             load_kwargs["quantization_config"] = quantization_config
             load_kwargs["device_map"] = "auto"
+            using_quantization = True
             print(f"✅ Configuration int8 appliquée (réduction VRAM ~50%)")
-        except ImportError:
-            print(f"⚠️ bitsandbytes non disponible, chargement normal")
+
+        except ImportError as e:
+            print(f"⚠️ bitsandbytes non disponible: {e}")
+            print(f"   Installez avec: pip install bitsandbytes")
+            quantization = "none"
+        except Exception as e:
+            print(f"⚠️ Erreur configuration int8: {e}")
             quantization = "none"
 
     elif quantization == "int4" and device.type == "cuda":
         # Quantization int4 avec bitsandbytes
         try:
+            import bitsandbytes as bnb
             from transformers import BitsAndBytesConfig
+
+            print(f"   bitsandbytes version: {bnb.__version__}")
+            print(f"   CUDA available: {torch.cuda.is_available()}")
+            print(f"   CUDA version: {torch.version.cuda}")
+
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_compute_dtype=torch.bfloat16,
@@ -614,21 +633,45 @@ def load_model(model_name: str, device: torch.device, quantization: str = "none"
             )
             load_kwargs["quantization_config"] = quantization_config
             load_kwargs["device_map"] = "auto"
+            using_quantization = True
             print(f"✅ Configuration int4 appliquée (réduction VRAM ~75%)")
-        except ImportError:
-            print(f"⚠️ bitsandbytes non disponible, chargement normal")
+
+        except ImportError as e:
+            print(f"⚠️ bitsandbytes non disponible: {e}")
+            print(f"   Installez avec: pip install bitsandbytes")
+            quantization = "none"
+        except Exception as e:
+            print(f"⚠️ Erreur configuration int4: {e}")
             quantization = "none"
 
-    # Chargement standard si pas de quantization ou si CPU
+    # Configuration pour chargement standard
     if quantization == "none":
         load_kwargs["torch_dtype"] = (torch.bfloat16 if device.type == "cuda" else None)
+        # Avec RTX 4090, utiliser flash attention si disponible
+        load_kwargs["attn_implementation"] = "sdpa"
 
-    model = AutoModelForSeq2SeqLM.from_pretrained(resolved, **load_kwargs)
+    try:
+        print(f"📥 Téléchargement/chargement du modèle...")
+        model = AutoModelForSeq2SeqLM.from_pretrained(resolved, **load_kwargs)
+        print(f"✅ Modèle chargé avec succès")
+    except Exception as e:
+        print(f"❌ Erreur lors du chargement: {e}")
+        print(f"   Tentative de chargement sans quantization...")
+        # Fallback: chargement sans quantization
+        load_kwargs = {
+            "torch_dtype": (torch.bfloat16 if device.type == "cuda" else None),
+            "attn_implementation": "sdpa",
+            **tp
+        }
+        model = AutoModelForSeq2SeqLM.from_pretrained(resolved, **load_kwargs)
+        using_quantization = False
+        quantization = "none"
 
     model.eval()
 
     # Déplacement vers le device seulement si pas de quantization (device_map gère déjà)
-    if quantization == "none" and device.type == "cuda":
+    if not using_quantization and device.type == "cuda":
+        print(f"📍 Déplacement du modèle vers {device}...")
         model.to(device)
 
     # Affichage de la VRAM utilisée

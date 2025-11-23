@@ -935,25 +935,39 @@ def translate_batch_generic(
     out_ids = _gen_attempt(enc, {"num_beams": 1}, forced_bos, max_new=max(MIN_NEW_TOKENS, int(dyn_new * 0.5)), use_cache=False)
     return tokenizer.batch_decode(out_ids, skip_special_tokens=True)
 
-def suggest_next_batch_size(curr_bs: int, free_mib: int, max_bs_cap: int = 1024) -> int:
+def suggest_next_batch_size(curr_bs: int, free_mib: int, max_bs_cap: int = 1024, avg_input_length: int = 0) -> int:
     """
-    Suggère la taille de batch suivante basée sur la VRAM disponible
+    Suggère la taille de batch suivante basée sur la VRAM disponible et la longueur des inputs
 
     Args:
         curr_bs: Batch size actuel
         free_mib: VRAM libre en MiB
         max_bs_cap: Plafond maximum du batch size
+        avg_input_length: Longueur moyenne des inputs en tokens (0 = ignore)
 
     Returns:
         Nouveau batch size suggéré
     """
-    # Avec beaucoup de VRAM, on peut augmenter
+    # Si on connaît la longueur moyenne, adapter le batch size en conséquence
+    # Les textes longs nécessitent des batch plus petits (VRAM ∝ batch_size × length × num_beams)
+    if avg_input_length > 0:
+        if avg_input_length > 250:  # Textes très longs (>250 tokens)
+            max_bs_cap = min(max_bs_cap, 64)  # Max 64 segments en parallèle
+            print(f"  [BATCH SIZE LIMIT] Very long inputs ({avg_input_length} tokens) → cap at 64")
+        elif avg_input_length > 150:  # Textes longs (150-250 tokens)
+            max_bs_cap = min(max_bs_cap, 128)  # Max 128 segments
+            print(f"  [BATCH SIZE LIMIT] Long inputs ({avg_input_length} tokens) → cap at 128")
+        elif avg_input_length > 100:  # Textes moyens-longs (100-150 tokens)
+            max_bs_cap = min(max_bs_cap, 192)  # Max 192 segments
+            print(f"  [BATCH SIZE LIMIT] Medium-long inputs ({avg_input_length} tokens) → cap at 192")
+
+    # Avec beaucoup de VRAM, on peut augmenter (mais limité par max_bs_cap)
     if free_mib >= 18000:  # > 18 GB libre
         new_bs = min(curr_bs + 64, max_bs_cap)
     elif free_mib >= 12000:  # 12-18 GB libre
         new_bs = min(curr_bs + 32, max_bs_cap)
     elif free_mib >= 8000:  # 8-12 GB libre
-        new_bs = curr_bs  # Stable
+        new_bs = min(curr_bs, max_bs_cap)  # Stable mais respecte la limite
     elif free_mib >= 4000:  # 4-8 GB libre
         new_bs = max(MIN_BATCH_SIZE, int(curr_bs * 0.75))  # Réduire de 25%
     elif free_mib >= 2000:  # 2-4 GB libre
@@ -962,7 +976,7 @@ def suggest_next_batch_size(curr_bs: int, free_mib: int, max_bs_cap: int = 1024)
         new_bs = MIN_BATCH_SIZE  # Minimum absolu
 
     if new_bs != curr_bs:
-        print(f"  [BATCH SIZE] Adjusted: {curr_bs} → {new_bs} (free VRAM: {free_mib} MiB)")
+        print(f"  [BATCH SIZE] Adjusted: {curr_bs} → {new_bs} (free VRAM: {free_mib} MiB, avg_len: {avg_input_length})")
 
     return new_bs
 
@@ -1060,7 +1074,15 @@ class ExcelTranslator:
 
             while k < len(group_texts):
                 free_mib = free_vram_mib()
-                batch_size = suggest_next_batch_size(batch_size, free_mib, max_bs_cap=specialist_cap)
+
+                # Calculer la longueur moyenne des prochains textes pour adapter le batch size
+                next_batch_preview = group_texts[k:k + min(batch_size, len(group_texts) - k)]
+                if next_batch_preview:
+                    avg_len = sum(len(self.tokenizer(t, add_special_tokens=False).input_ids) for t in next_batch_preview[:10]) // min(10, len(next_batch_preview))
+                else:
+                    avg_len = 0
+
+                batch_size = suggest_next_batch_size(batch_size, free_mib, max_bs_cap=specialist_cap, avg_input_length=avg_len)
 
                 bs = min(batch_size, len(group_texts) - k)
                 batch_texts = group_texts[k:k + bs]
@@ -1256,7 +1278,15 @@ class DocxTranslator:
 
             while k < len(group_texts):
                 free_mib = free_vram_mib()
-                batch_size = suggest_next_batch_size(batch_size, free_mib, max_bs_cap=specialist_cap)
+
+                # Calculer la longueur moyenne des prochains textes pour adapter le batch size
+                next_batch_preview = group_texts[k:k + min(batch_size, len(group_texts) - k)]
+                if next_batch_preview:
+                    avg_len = sum(len(self.tokenizer(t, add_special_tokens=False).input_ids) for t in next_batch_preview[:10]) // min(10, len(next_batch_preview))
+                else:
+                    avg_len = 0
+
+                batch_size = suggest_next_batch_size(batch_size, free_mib, max_bs_cap=specialist_cap, avg_input_length=avg_len)
 
                 bs = min(batch_size, len(group_texts) - k)
                 batch_texts = group_texts[k:k + bs]

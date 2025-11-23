@@ -234,6 +234,70 @@ def free_ram_mib() -> int:
     except Exception:
         return 0
 
+def get_system_metrics() -> Dict[str, Any]:
+    """Récupère les métriques système en temps réel (CPU, RAM, GPU, VRAM)"""
+    metrics = {
+        'cpu_percent': 0.0,
+        'ram_used_gb': 0.0,
+        'ram_total_gb': 0.0,
+        'ram_percent': 0.0,
+        'gpu_available': False,
+        'gpu_name': 'N/A',
+        'vram_used_gb': 0.0,
+        'vram_total_gb': 0.0,
+        'vram_percent': 0.0,
+        'gpu_utilization': 0.0,
+        'gpu_temperature': 0
+    }
+
+    try:
+        import psutil
+
+        # CPU
+        metrics['cpu_percent'] = psutil.cpu_percent(interval=0.1)
+
+        # RAM
+        ram = psutil.virtual_memory()
+        metrics['ram_used_gb'] = ram.used / (1024**3)
+        metrics['ram_total_gb'] = ram.total / (1024**3)
+        metrics['ram_percent'] = ram.percent
+
+    except Exception as e:
+        print(f"[METRICS] Error getting CPU/RAM: {e}")
+
+    # GPU/VRAM
+    if torch.cuda.is_available():
+        try:
+            metrics['gpu_available'] = True
+            metrics['gpu_name'] = torch.cuda.get_device_name(GPU_INDEX)
+
+            # VRAM
+            free_b, total_b = torch.cuda.mem_get_info(GPU_INDEX)
+            used_b = total_b - free_b
+            metrics['vram_used_gb'] = used_b / (1024**3)
+            metrics['vram_total_gb'] = total_b / (1024**3)
+            metrics['vram_percent'] = (used_b / total_b) * 100 if total_b > 0 else 0
+
+            # Utilisation GPU et température via pynvml
+            try:
+                import pynvml
+                pynvml.nvmlInit()
+                handle = pynvml.nvmlDeviceGetHandleByIndex(GPU_INDEX)
+                utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                metrics['gpu_utilization'] = utilization.gpu
+                try:
+                    metrics['gpu_temperature'] = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+                except:
+                    pass
+                pynvml.nvmlShutdown()
+            except Exception as e:
+                print(f"[METRICS] pynvml error: {e}")
+
+        except Exception as e:
+            print(f"[METRICS] Error getting GPU/VRAM: {e}")
+
+    return metrics
+
 # =========================
 #    GPU DETECTION
 # =========================

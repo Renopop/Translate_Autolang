@@ -292,21 +292,30 @@ def detect_lang_nllb(text: str) -> str:
     if not s:
         return "eng_Latn"
     if re.search(r"[\u0600-\u06FF]", s):
+        print(f"[LANG DETECT] Arabic characters detected -> ara_Arab")
         return "ara_Arab"
     if re.search(r"[\u0400-\u04FF]", s):
+        print(f"[LANG DETECT] Cyrillic characters detected -> rus_Cyrl")
         return "rus_Cyrl"
     if re.search(r"[\u4E00-\u9FFF]", s):
+        print(f"[LANG DETECT] Chinese characters detected -> zho_Hans")
         return "zho_Hans"
     head = s[:160]
+    detected_lang = None
     try:
         iso2 = _detect_iso2_cached(head)
         code = ISO2_TO_NLLB.get(iso2)
         if code:
+            detected_lang = code
+            print(f"[LANG DETECT] langdetect says '{iso2}' -> {code} | Sample: {head[:50]}...")
             return code
-    except Exception:
+    except Exception as e:
+        print(f"[LANG DETECT] langdetect failed: {e}")
         pass
     if ISO_HINT_EN.search(s):
+        print(f"[LANG DETECT] English hints detected -> eng_Latn | Sample: {s[:50]}...")
         return "eng_Latn"
+    print(f"[LANG DETECT] Fallback to fra_Latn | Sample: {s[:50]}...")
     return "fra_Latn"
 
 def same_language(src_code: str, tgt_code: str) -> bool:
@@ -540,26 +549,84 @@ def translate_batch_generic(
     """Traduction générique par lots avec backoff OOM"""
 
     # ⚠️ IMPORTANT: Configuration du tokenizer AVANT toute utilisation
+    print(f"\n[TRANSLATION DEBUG]")
+    print(f"  Model: {model_name}")
+    print(f"  Source: {src_code}, Target: {tgt_code}")
+    print(f"  Sample text: {texts[0][:100] if texts else 'N/A'}...")
+    print(f"  Tokenizer has src_lang: {hasattr(tokenizer, 'src_lang')}")
+    print(f"  Tokenizer has tgt_lang: {hasattr(tokenizer, 'tgt_lang')}")
+    print(f"  Tokenizer has lang_code_to_id: {hasattr(tokenizer, 'lang_code_to_id')}")
+
     # Configuration M2M vs NLLB
     if is_m2m(model_name):
         src = NLLB_TO_M2M.get(src_code, "auto")
         tgt = NLLB_TO_M2M.get(tgt_code, "en")
         if hasattr(tokenizer, "src_lang"):
             tokenizer.src_lang = src
+            print(f"  Set tokenizer.src_lang = {src}")
         if hasattr(tokenizer, "tgt_lang"):
             tokenizer.tgt_lang = tgt
+            print(f"  Set tokenizer.tgt_lang = {tgt}")
         forced_bos = tokenizer.get_lang_id(tgt) if hasattr(tokenizer, "get_lang_id") else None
         print(f"[M2M] src={src_code}→{src}, tgt={tgt_code}→{tgt}, forced_bos={forced_bos}")
     else:
         # Pour NLLB, il faut absolument configurer src_lang et tgt_lang
         if hasattr(tokenizer, "src_lang"):
             tokenizer.src_lang = src_code
+            print(f"  Set tokenizer.src_lang = {src_code}")
+        else:
+            print(f"  WARNING: tokenizer does not have 'src_lang' attribute!")
+
         if hasattr(tokenizer, "tgt_lang"):
             tokenizer.tgt_lang = tgt_code
+            print(f"  Set tokenizer.tgt_lang = {tgt_code}")
+        else:
+            print(f"  WARNING: tokenizer does not have 'tgt_lang' attribute!")
+
         # Récupérer le forced_bos_token_id pour la langue cible
+        # NLLB utilise des tokens spéciaux pour chaque langue
         forced_bos = None
-        if hasattr(tokenizer, "lang_code_to_id") and tgt_code in tokenizer.lang_code_to_id:
-            forced_bos = tokenizer.lang_code_to_id[tgt_code]
+
+        # Méthode 1 : via lang_code_to_id (NLLB-200)
+        if hasattr(tokenizer, "lang_code_to_id"):
+            if tgt_code in tokenizer.lang_code_to_id:
+                forced_bos = tokenizer.lang_code_to_id[tgt_code]
+                print(f"  forced_bos from lang_code_to_id[{tgt_code}] = {forced_bos}")
+            else:
+                print(f"  WARNING: {tgt_code} not found in tokenizer.lang_code_to_id!")
+                print(f"  Available codes sample: {list(tokenizer.lang_code_to_id.keys())[:10]}")
+
+        # Méthode 2 : via convert_tokens_to_ids (fallback)
+        if forced_bos is None:
+            try:
+                # Les tokens de langue NLLB sont de la forme "fra_Latn"
+                forced_bos = tokenizer.convert_tokens_to_ids(tgt_code)
+                if forced_bos != tokenizer.unk_token_id:
+                    print(f"  forced_bos from convert_tokens_to_ids({tgt_code}) = {forced_bos}")
+                else:
+                    forced_bos = None
+            except Exception as e:
+                print(f"  convert_tokens_to_ids failed: {e}")
+
+        # Méthode 3 : essayer avec le code court (ex: "fra" au lieu de "fra_Latn")
+        if forced_bos is None:
+            short_code = tgt_code.split("_")[0]
+            try:
+                forced_bos = tokenizer.convert_tokens_to_ids(short_code)
+                if forced_bos != tokenizer.unk_token_id:
+                    print(f"  forced_bos from short code '{short_code}' = {forced_bos}")
+                else:
+                    forced_bos = None
+            except Exception:
+                pass
+
+        if forced_bos is None:
+            print(f"  ERROR: Could not find forced_bos for {tgt_code}!")
+            print(f"  Tokenizer type: {type(tokenizer)}")
+            print(f"  This will result in incorrect translations!")
+        else:
+            print(f"  ✓ Successfully set forced_bos = {forced_bos} for {tgt_code}")
+
         print(f"[NLLB] src={src_code}, tgt={tgt_code}, forced_bos={forced_bos}")
 
     def _encode(_texts, _max_len=MAX_TOKENS_PER_CHUNK):
@@ -574,7 +641,12 @@ def translate_batch_generic(
             kwargs = dict(**enc, max_new_tokens=max_new, use_cache=use_cache, **genp)
             if forced_bos is not None:
                 kwargs["forced_bos_token_id"] = forced_bos
-            return model.generate(**kwargs)
+                print(f"  Using forced_bos_token_id={forced_bos} in generation")
+            else:
+                print(f"  WARNING: No forced_bos_token_id set! Model may generate any language!")
+            out_ids = model.generate(**kwargs)
+            print(f"  First generated token IDs: {out_ids[0][:5].tolist() if len(out_ids) > 0 else 'N/A'}")
+            return out_ids
 
     genp = gen_params_for_preset(preset)
     if extra_gen_kwargs:
@@ -599,7 +671,9 @@ def translate_batch_generic(
     for step, plan in enumerate(attempts, 1):
         try:
             out_ids = _gen_attempt(enc, plan["genp"], forced_bos, plan["max_new"], use_cache=plan["use_cache"])
-            return tokenizer.batch_decode(out_ids, skip_special_tokens=True)
+            result = tokenizer.batch_decode(out_ids, skip_special_tokens=True)
+            print(f"  Generated sample: {result[0][:100] if result else 'N/A'}...")
+            return result
         except RuntimeError as e:
             if "out of memory" not in str(e).lower():
                 raise

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Application Streamlit - Traducteur Multilingue Excel
+Application Streamlit - Traducteur Multilingue Excel & Word
 Auteur : Renaud LOISON
 Interface moderne avec Streamlit
 """
@@ -14,6 +14,7 @@ import torch
 from translator_core import (
     TranslatorConfig,
     ExcelTranslator,
+    DocxTranslator,
     MODELS,
     LANG_CODES,
     get_gpu_info,
@@ -24,7 +25,7 @@ from translator_core import (
 
 # Configuration de la page
 st.set_page_config(
-    page_title="Traducteur Excel Multilingue",
+    page_title="Traducteur Excel & Word Multilingue",
     page_icon="🌐",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -68,7 +69,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # En-tête
-st.markdown('<h1 class="main-header">🌐 Traducteur Excel Multilingue</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">🌐 Traducteur Excel & Word Multilingue</h1>', unsafe_allow_html=True)
 st.markdown("---")
 
 # Initialisation de l'état de session
@@ -171,17 +172,20 @@ with col1:
 
     # Upload de fichier
     uploaded_file = st.file_uploader(
-        "Choisissez un fichier Excel (.xlsx, .xls)",
-        type=['xlsx', 'xls'],
-        help="Le fichier Excel contenant le texte à traduire"
+        "Choisissez un fichier Excel (.xlsx, .xls) ou Word (.docx)",
+        type=['xlsx', 'xls', 'docx'],
+        help="Le fichier Excel ou Word contenant le texte à traduire"
     )
 
     if uploaded_file is not None:
-        st.success(f"✅ Fichier sélectionné: {uploaded_file.name}")
+        file_ext = Path(uploaded_file.name).suffix.lower()
+        file_type = "Excel" if file_ext in ['.xlsx', '.xls'] else "Word"
+        st.success(f"✅ Fichier {file_type} sélectionné: {uploaded_file.name}")
 
         # Affichage des informations du fichier
         file_size = uploaded_file.size / 1024  # En KB
         st.info(f"📊 Taille: {file_size:.2f} KB")
+        st.info(f"📄 Type: {file_type}")
 
 with col2:
     st.header("📋 Récapitulatif")
@@ -201,7 +205,7 @@ with col2:
     else:
         st.markdown("""
         <div class="warning-box">
-        ⚠️ Veuillez sélectionner un fichier Excel pour commencer
+        ⚠️ Veuillez sélectionner un fichier Excel (.xlsx/.xls) ou Word (.docx) pour commencer
         </div>
         """, unsafe_allow_html=True)
 
@@ -222,13 +226,19 @@ if uploaded_file is not None:
             status_text = st.empty()
 
             try:
+                # Déterminer le type de fichier
+                file_ext = Path(uploaded_file.name).suffix.lower()
+                is_excel = file_ext in ['.xlsx', '.xls']
+
                 # Sauvegarde temporaire du fichier uploadé
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_input:
+                suffix = '.xlsx' if is_excel else '.docx'
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_input:
                     tmp_input.write(uploaded_file.getvalue())
                     input_path = tmp_input.name
 
                 # Préparation du fichier de sortie
-                output_filename = f"{Path(uploaded_file.name).stem}_translated_{LANG_CODES[target_lang].split('_')[0]}.xlsx"
+                output_ext = '.xlsx' if is_excel else '.docx'
+                output_filename = f"{Path(uploaded_file.name).stem}_translated_{LANG_CODES[target_lang].split('_')[0]}{output_ext}"
                 output_path = os.path.join(tempfile.gettempdir(), output_filename)
 
                 # Configuration du traducteur
@@ -247,8 +257,11 @@ if uploaded_file is not None:
                     if progress > 0:
                         progress_bar.progress(min(int(progress), 100) / 100)
 
-                # Création du traducteur
-                translator = ExcelTranslator(config, progress_callback=update_progress)
+                # Création du traducteur approprié
+                if is_excel:
+                    translator = ExcelTranslator(config, progress_callback=update_progress)
+                else:
+                    translator = DocxTranslator(config, progress_callback=update_progress)
 
                 # Chargement du modèle
                 status_text.info("🔧 Chargement du modèle...")
@@ -294,11 +307,18 @@ if st.session_state.translation_done and st.session_state.output_file:
             with open(st.session_state.output_file, 'rb') as f:
                 file_data = f.read()
 
+            # Déterminer le MIME type
+            file_ext = Path(st.session_state.output_filename).suffix.lower()
+            if file_ext == '.docx':
+                mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            else:
+                mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
             st.download_button(
                 label="⬇️ Télécharger le fichier traduit",
                 data=file_data,
                 file_name=st.session_state.output_filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                mime=mime_type,
                 type="primary",
                 use_container_width=True
             )
@@ -312,8 +332,9 @@ if st.session_state.translation_done and st.session_state.output_file:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #666; padding: 2rem;">
-    <p>🌐 Traducteur Excel Multilingue - Powered by Transformers & Streamlit</p>
+    <p>🌐 Traducteur Excel & Word Multilingue - Powered by Transformers & Streamlit</p>
     <p style="font-size: 0.8rem;">Utilise NLLB-200 et M2M100 pour des traductions de haute qualité</p>
+    <p style="font-size: 0.8rem;">Support Excel (.xlsx, .xls) et Word (.docx) avec préservation de la mise en forme</p>
 </div>
 """, unsafe_allow_html=True)
 

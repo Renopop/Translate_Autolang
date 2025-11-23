@@ -525,16 +525,12 @@ def dynamic_max_new_tokens(tokenizer, model_cfg, texts, factor=1.25, floor=50, m
         if n > max_in:
             max_in = n
 
-    ceilings = []
-    for attr in ("max_length", "max_position_embeddings", "max_target_positions"):
-        v = getattr(model_cfg, attr, None)
-        if isinstance(v, int) and v > 0:
-            ceilings.append(v)
+    # Pour les traductions, on veut AU MOINS autant de tokens en sortie qu'en entrée
+    # Donc on ignore les limites trop basses du model config
+    new_tokens = int(max(floor, min(int(max_in * factor), max_ceiling)))
 
-    # Limiter le plafond pour éviter OOM (512 au lieu de 1024)
-    ceiling = min([max_ceiling] + ceilings)
-    new_tokens = int(max(floor, min(int(max_in * factor), ceiling)))
-    result = max(floor, min(new_tokens, ceiling - 1))
+    # Assurer qu'on a au minimum la taille de l'input
+    result = max(floor, min(new_tokens, max_ceiling))
 
     print(f"  [MAX_NEW_TOKENS] Input: {max_in} tokens → Output ceiling: {result} tokens (factor={factor:.2f})")
 
@@ -889,9 +885,17 @@ def translate_batch_generic(
     if extra_gen_kwargs:
         genp.update(extra_gen_kwargs)
     factor = 1.25 if preset != "Quality+" else 1.30
+
+    # Optimisations par langue
     if (src_code or "").startswith("rus_"):
         genp.setdefault("num_beams", 1)
         factor = min(factor, 1.15)
+
+    # Pour le japonais, chinois, coréen : réduire num_beams pour accélérer
+    if src_code in ["jpn_Jpan", "zho_Hans", "kor_Hang"]:
+        if genp.get("num_beams", 1) > 3:
+            genp["num_beams"] = 3  # Réduire de 5 à 3 beams
+            print(f"  [OPTIMIZATION] Reducing num_beams to 3 for CJK language ({src_code})")
 
     dyn_new = dynamic_max_new_tokens(tokenizer, model_cfg, texts, factor=factor, floor=MIN_NEW_TOKENS)
     enc = _encode(texts)

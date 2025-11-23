@@ -163,6 +163,38 @@ with st.sidebar:
         help="Fast: rapide mais qualité moyenne | Quality: bon équilibre | Very High: meilleure qualité mais plus lent"
     )
 
+    # Quantization
+    st.subheader("⚡ Quantization (réduction VRAM)")
+    quantization = st.select_slider(
+        "Niveau de compression",
+        options=["none", "int8", "int4"],
+        value="none",
+        help="""
+        **none**: Pas de quantization (BF16/FP32) - Qualité maximale, VRAM max
+        **int8**: Quantization 8-bit - ~50% VRAM économisée, qualité excellente
+        **int4**: Quantization 4-bit - ~75% VRAM économisée, qualité bonne
+
+        ⚠️ Nécessite bitsandbytes (pip install bitsandbytes)
+        💡 Recommandé: int8 pour NLLB-200 1.3B (réduit de ~5GB à ~2.5GB)
+        """
+    )
+
+    # Affichage des estimations VRAM
+    if quantization != "none":
+        vram_estimates = {
+            ("Fast (NLLB-200 distilled 600M)", "none"): "~2.5 GB",
+            ("Fast (NLLB-200 distilled 600M)", "int8"): "~1.2 GB",
+            ("Fast (NLLB-200 distilled 600M)", "int4"): "~0.7 GB",
+            ("Quality (NLLB-200 1.3B)", "none"): "~5.0 GB",
+            ("Quality (NLLB-200 1.3B)", "int8"): "~2.5 GB",
+            ("Quality (NLLB-200 1.3B)", "int4"): "~1.5 GB",
+            ("Very High (M2M100 1.2B)", "none"): "~4.8 GB",
+            ("Very High (M2M100 1.2B)", "int8"): "~2.4 GB",
+            ("Very High (M2M100 1.2B)", "int4"): "~1.4 GB",
+        }
+        est = vram_estimates.get((model_choice, quantization), "N/A")
+        st.info(f"💾 VRAM estimée avec {quantization}: **{est}**")
+
     # Langue cible
     st.subheader("🌍 Langue cible")
     target_lang = st.selectbox(
@@ -258,6 +290,7 @@ with col2:
         🌍 Langue: {target_lang}<br>
         ⚡ Preset: {preset}<br>
         📦 Batch: {batch_size}<br>
+        🔬 Quantization: {quantization.upper() if quantization != "none" else "Aucune"}<br>
         🔒 Offline: {'✅' if offline_mode else '❌'}<br>
         📁 Cache: {os.path.basename(cache_dir) if cache_dir else 'Défaut'}
         </div>
@@ -315,7 +348,8 @@ if uploaded_file is not None:
                     batch_size=batch_size,
                     preset=preset,
                     offline_mode=offline_mode,
-                    cache_dir=cache_dir if cache_dir and os.path.isdir(cache_dir) else None
+                    cache_dir=cache_dir if cache_dir and os.path.isdir(cache_dir) else None,
+                    quantization=quantization
                 )
 
                 # Callback de progression

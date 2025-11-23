@@ -132,13 +132,16 @@ class TranslatorConfig:
         batch_size: int = DEFAULT_BATCH_SIZE,
         preset: str = "Quality+",
         offline_mode: bool = False,
-        cache_dir: Optional[str] = None
+        cache_dir: Optional[str] = None,
+        quantization: str = "none"
     ):
         # Validation des paramètres obligatoires
         if not model_name:
             raise ValueError("model_name cannot be None or empty")
         if not target_lang:
             raise ValueError("target_lang cannot be None or empty")
+        if quantization not in ["none", "int8", "int4"]:
+            raise ValueError("quantization must be 'none', 'int8', or 'int4'")
 
         self.model_name = model_name
         self.target_lang = target_lang
@@ -146,6 +149,7 @@ class TranslatorConfig:
         self.preset = preset
         self.offline_mode = offline_mode
         self.cache_dir = cache_dir
+        self.quantization = quantization
 
         # Appliquer la configuration offline
         global OFFLINE_MODE, MODELS_CACHE_DIR
@@ -561,23 +565,76 @@ def _resolve_local_repo(repo_or_path: str) -> str:
 
     return repo_or_path
 
-def load_model(model_name: str, device: torch.device):
-    """Charge un modèle de traduction"""
+def load_model(model_name: str, device: torch.device, quantization: str = "none"):
+    """
+    Charge un modèle de traduction avec option de quantization
+
+    Args:
+        model_name: Nom du modèle HuggingFace
+        device: Device torch (cuda/cpu)
+        quantization: Type de quantization ("none", "int8", "int4")
+    """
     print(f"🔧 Chargement modèle : {model_name}")
+    if quantization != "none":
+        print(f"⚡ Quantization activée : {quantization}")
+
     tp = _tp_kwargs()
     resolved = _resolve_local_repo(model_name)
 
     tokenizer = AutoTokenizer.from_pretrained(resolved, **tp)
-    model = AutoModelForSeq2SeqLM.from_pretrained(
-        resolved,
-        torch_dtype=(torch.bfloat16 if device.type == "cuda" else None),
-        attn_implementation="sdpa",
-        **tp
-    )
+
+    # Configuration de la quantization
+    load_kwargs = {"attn_implementation": "sdpa", **tp}
+
+    if quantization == "int8" and device.type == "cuda":
+        # Quantization int8 avec bitsandbytes
+        try:
+            from transformers import BitsAndBytesConfig
+            quantization_config = BitsAndBytesConfig(
+                load_in_8bit=True,
+                llm_int8_threshold=6.0,
+                llm_int8_has_fp16_weight=False
+            )
+            load_kwargs["quantization_config"] = quantization_config
+            load_kwargs["device_map"] = "auto"
+            print(f"✅ Configuration int8 appliquée (réduction VRAM ~50%)")
+        except ImportError:
+            print(f"⚠️ bitsandbytes non disponible, chargement normal")
+            quantization = "none"
+
+    elif quantization == "int4" and device.type == "cuda":
+        # Quantization int4 avec bitsandbytes
+        try:
+            from transformers import BitsAndBytesConfig
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4"
+            )
+            load_kwargs["quantization_config"] = quantization_config
+            load_kwargs["device_map"] = "auto"
+            print(f"✅ Configuration int4 appliquée (réduction VRAM ~75%)")
+        except ImportError:
+            print(f"⚠️ bitsandbytes non disponible, chargement normal")
+            quantization = "none"
+
+    # Chargement standard si pas de quantization ou si CPU
+    if quantization == "none":
+        load_kwargs["torch_dtype"] = (torch.bfloat16 if device.type == "cuda" else None)
+
+    model = AutoModelForSeq2SeqLM.from_pretrained(resolved, **load_kwargs)
 
     model.eval()
-    if device.type == "cuda":
+
+    # Déplacement vers le device seulement si pas de quantization (device_map gère déjà)
+    if quantization == "none" and device.type == "cuda":
         model.to(device)
+
+    # Affichage de la VRAM utilisée
+    if device.type == "cuda":
+        print_vram_state("POST-LOAD")
+
     return tokenizer, model
 
 def get_fallback_tokenizer_model(src_code: str, tgt_code: str, device: torch.device):
@@ -850,10 +907,16 @@ class ExcelTranslator:
     def load_model(self):
         """Charge le modèle de traduction"""
         self._update_progress(f"🔧 Chargement du modèle {self.config.model_name}...")
+        if self.config.quantization != "none":
+            self._update_progress(f"⚡ Quantization {self.config.quantization} activée")
         # Purge VRAM avant chargement pour maximiser la mémoire disponible
         purge_vram(sync=True)
         print_vram_state("VRAM avant chargement modèle")
-        self.tokenizer, self.model = load_model(self.config.model_name, self.device)
+        self.tokenizer, self.model = load_model(
+            self.config.model_name,
+            self.device,
+            quantization=self.config.quantization
+        )
         self.model_cfg = self.model.config
         purge_vram(sync=True)
         print_vram_state("VRAM après chargement modèle")
@@ -1025,10 +1088,16 @@ class DocxTranslator:
     def load_model(self):
         """Charge le modèle de traduction"""
         self._update_progress(f"🔧 Chargement du modèle {self.config.model_name}...")
+        if self.config.quantization != "none":
+            self._update_progress(f"⚡ Quantization {self.config.quantization} activée")
         # Purge VRAM avant chargement pour maximiser la mémoire disponible
         purge_vram(sync=True)
         print_vram_state("VRAM avant chargement modèle")
-        self.tokenizer, self.model = load_model(self.config.model_name, self.device)
+        self.tokenizer, self.model = load_model(
+            self.config.model_name,
+            self.device,
+            quantization=self.config.quantization
+        )
         self.model_cfg = self.model.config
         purge_vram(sync=True)
         print_vram_state("VRAM après chargement modèle")

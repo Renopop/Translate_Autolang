@@ -1,0 +1,21 @@
+# Core dependencies
+torch>=2.0.0
+transformers>=4.30.0
+pandas>=1.5.0
+openpyxl>=3.0.0
+xlsxwriter>=3.0.0
+
+# Language detection
+langdetect>=1.0.9
+
+# Progress bars
+tqdm>=4.65.0
+
+# Streamlit UI
+streamlit>=1.28.0
+
+# System monitoring (optional)
+psutil>=5.9.0
+
+# Additional utilities
+numpy>=1.24.0

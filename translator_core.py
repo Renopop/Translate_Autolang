@@ -134,6 +134,12 @@ class TranslatorConfig:
         offline_mode: bool = False,
         cache_dir: Optional[str] = None
     ):
+        # Validation des paramètres obligatoires
+        if not model_name:
+            raise ValueError("model_name cannot be None or empty")
+        if not target_lang:
+            raise ValueError("target_lang cannot be None or empty")
+
         self.model_name = model_name
         self.target_lang = target_lang
         self.batch_size = max(MIN_BATCH_SIZE, batch_size)

@@ -17,25 +17,36 @@ Application de traduction multilingue pour fichiers Excel et Word utilisant les 
 
 ## 🚀 Installation
 
-### Prérequis
-
-- Python 3.8 ou supérieur
-- (Optionnel) GPU NVIDIA avec CUDA pour de meilleures performances
-
-### Installation des dépendances
+### Installation rapide
 
 ```bash
+# 1. Vérifier les dépendances et installer automatiquement
+python install_dependencies.py
+
+# 2. Ou installer manuellement
 pip install -r requirements.txt
 ```
+
+### Guides d'installation détaillés
+
+- **Windows** : Voir [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md) pour un guide complet
+- **Problèmes RTX 4090** : Voir [TROUBLESHOOTING_RTX4090.md](TROUBLESHOOTING_RTX4090.md)
+- **Test quantization** : Lancer `python test_quantization.py` pour diagnostiquer
+
+### Prérequis
+
+- **Python 3.10 ou 3.11** (recommandé, éviter 3.12+)
+- (Optionnel) GPU NVIDIA avec CUDA pour de meilleures performances
+- (Optionnel) Drivers NVIDIA à jour pour monitoring GPU
 
 ### Pour l'utilisation GPU (recommandé)
 
 ```bash
-# PyTorch avec CUDA 11.8
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-# Ou CUDA 12.1
+# PyTorch avec CUDA 12.1 (recommandé pour RTX 40xx)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Ou CUDA 11.8 (pour GPU plus anciens)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
 ## 📖 Utilisation

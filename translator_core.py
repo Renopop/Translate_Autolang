@@ -730,8 +730,13 @@ class ExcelTranslator:
     def load_model(self):
         """Charge le modèle de traduction"""
         self._update_progress(f"🔧 Chargement du modèle {self.config.model_name}...")
+        # Purge VRAM avant chargement pour maximiser la mémoire disponible
+        purge_vram(sync=True)
+        print_vram_state("VRAM avant chargement modèle")
         self.tokenizer, self.model = load_model(self.config.model_name, self.device)
         self.model_cfg = self.model.config
+        purge_vram(sync=True)
+        print_vram_state("VRAM après chargement modèle")
         self._update_progress("✅ Modèle chargé")
 
     def translate_file(self, input_path: str, output_path: str):
@@ -794,34 +799,55 @@ class ExcelTranslator:
                 bs = min(batch_size, len(group_texts) - k)
                 batch_texts = group_texts[k:k + bs]
 
-                # Traduction du batch
-                try:
-                    out_txts = translate_batch_generic(
-                        self.config.model_name, self.tokenizer, self.model, self.device,
-                        src_lang, self.config.target_lang, batch_texts, self.model_cfg,
-                        preset=self.config.preset
-                    )
+                # Traduction du batch avec gestion OOM robuste
+                max_retries = 3
+                retry_count = 0
 
-                    for j, txt in enumerate(out_txts):
-                        outputs[idx_list[k + j]] = txt
+                while retry_count < max_retries:
+                    try:
+                        # Purge VRAM avant chaque batch pour maximiser mémoire disponible
+                        if retry_count > 0 or k == 0:
+                            purge_vram(sync=True)
 
-                    k += bs
-                    processed += bs
-                    progress = (processed / total_segments) * 100
-                    self._update_progress(f"📊 Progression: {processed}/{total_segments} segments", progress)
+                        out_txts = translate_batch_generic(
+                            self.config.model_name, self.tokenizer, self.model, self.device,
+                            src_lang, self.config.target_lang, batch_texts, self.model_cfg,
+                            preset=self.config.preset
+                        )
 
-                    # Purge périodique
-                    if processed % PURGE_EVERY_N_BATCHES == 0:
-                        purge_vram()
+                        for j, txt in enumerate(out_txts):
+                            outputs[idx_list[k + j]] = txt
 
-                except RuntimeError as e:
-                    if "out of memory" in str(e).lower():
-                        purge_vram()
-                        batch_size = max(MIN_BATCH_SIZE, batch_size // 2)
-                        self._update_progress(f"⚠️ OOM - Réduction batch size à {batch_size}")
-                        continue
-                    else:
-                        raise
+                        k += bs
+                        processed += bs
+                        progress = (processed / total_segments) * 100
+                        self._update_progress(f"📊 Progression: {processed}/{total_segments} segments", progress)
+
+                        # Purge périodique
+                        if processed % PURGE_EVERY_N_BATCHES == 0:
+                            purge_vram(sync=True)
+
+                        break  # Succès, sortir de la boucle retry
+
+                    except RuntimeError as e:
+                        if "out of memory" in str(e).lower():
+                            retry_count += 1
+                            purge_vram(sync=True)
+
+                            if retry_count >= max_retries:
+                                # Dernier recours: réduire batch size et réessayer
+                                batch_size = max(MIN_BATCH_SIZE, batch_size // 2)
+                                bs = min(batch_size, len(group_texts) - k)
+                                batch_texts = group_texts[k:k + bs]
+                                self._update_progress(f"⚠️ OOM persistant - Réduction batch à {batch_size}")
+                                retry_count = 0  # Reset pour nouveau batch size
+                                if bs == 1 and retry_count >= max_retries:
+                                    raise Exception(f"Impossible de traduire même avec batch_size=1. GPU trop faible ou texte trop long.")
+                            else:
+                                self._update_progress(f"⚠️ OOM - Tentative {retry_count}/{max_retries}")
+                                time.sleep(1)  # Pause courte pour laisser GPU se vider
+                        else:
+                            raise
 
         # Reconstruction
         self._update_progress("🔨 Reconstruction des textes...")
@@ -879,8 +905,13 @@ class DocxTranslator:
     def load_model(self):
         """Charge le modèle de traduction"""
         self._update_progress(f"🔧 Chargement du modèle {self.config.model_name}...")
+        # Purge VRAM avant chargement pour maximiser la mémoire disponible
+        purge_vram(sync=True)
+        print_vram_state("VRAM avant chargement modèle")
         self.tokenizer, self.model = load_model(self.config.model_name, self.device)
         self.model_cfg = self.model.config
+        purge_vram(sync=True)
+        print_vram_state("VRAM après chargement modèle")
         self._update_progress("✅ Modèle chargé")
 
     def translate_file(self, input_path: str, output_path: str):
@@ -949,34 +980,55 @@ class DocxTranslator:
                 bs = min(batch_size, len(group_texts) - k)
                 batch_texts = group_texts[k:k + bs]
 
-                # Traduction du batch
-                try:
-                    out_txts = translate_batch_generic(
-                        self.config.model_name, self.tokenizer, self.model, self.device,
-                        src_lang, self.config.target_lang, batch_texts, self.model_cfg,
-                        preset=self.config.preset
-                    )
+                # Traduction du batch avec gestion OOM robuste
+                max_retries = 3
+                retry_count = 0
 
-                    for j, txt in enumerate(out_txts):
-                        outputs[idx_list[k + j]] = txt
+                while retry_count < max_retries:
+                    try:
+                        # Purge VRAM avant chaque batch pour maximiser mémoire disponible
+                        if retry_count > 0 or k == 0:
+                            purge_vram(sync=True)
 
-                    k += bs
-                    processed += bs
-                    progress = (processed / total_segments) * 100
-                    self._update_progress(f"📊 Progression: {processed}/{total_segments} segments", progress)
+                        out_txts = translate_batch_generic(
+                            self.config.model_name, self.tokenizer, self.model, self.device,
+                            src_lang, self.config.target_lang, batch_texts, self.model_cfg,
+                            preset=self.config.preset
+                        )
 
-                    # Purge périodique
-                    if processed % PURGE_EVERY_N_BATCHES == 0:
-                        purge_vram()
+                        for j, txt in enumerate(out_txts):
+                            outputs[idx_list[k + j]] = txt
 
-                except RuntimeError as e:
-                    if "out of memory" in str(e).lower():
-                        purge_vram()
-                        batch_size = max(MIN_BATCH_SIZE, batch_size // 2)
-                        self._update_progress(f"⚠️ OOM - Réduction batch size à {batch_size}")
-                        continue
-                    else:
-                        raise
+                        k += bs
+                        processed += bs
+                        progress = (processed / total_segments) * 100
+                        self._update_progress(f"📊 Progression: {processed}/{total_segments} segments", progress)
+
+                        # Purge périodique
+                        if processed % PURGE_EVERY_N_BATCHES == 0:
+                            purge_vram(sync=True)
+
+                        break  # Succès, sortir de la boucle retry
+
+                    except RuntimeError as e:
+                        if "out of memory" in str(e).lower():
+                            retry_count += 1
+                            purge_vram(sync=True)
+
+                            if retry_count >= max_retries:
+                                # Dernier recours: réduire batch size et réessayer
+                                batch_size = max(MIN_BATCH_SIZE, batch_size // 2)
+                                bs = min(batch_size, len(group_texts) - k)
+                                batch_texts = group_texts[k:k + bs]
+                                self._update_progress(f"⚠️ OOM persistant - Réduction batch à {batch_size}")
+                                retry_count = 0  # Reset pour nouveau batch size
+                                if bs == 1 and retry_count >= max_retries:
+                                    raise Exception(f"Impossible de traduire même avec batch_size=1. GPU trop faible ou texte trop long.")
+                            else:
+                                self._update_progress(f"⚠️ OOM - Tentative {retry_count}/{max_retries}")
+                                time.sleep(1)  # Pause courte pour laisser GPU se vider
+                        else:
+                            raise
 
         # Reconstruction des textes traduits
         self._update_progress("🔨 Reconstruction des textes...")

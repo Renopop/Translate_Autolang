@@ -539,6 +539,29 @@ def translate_batch_generic(
 ):
     """Traduction générique par lots avec backoff OOM"""
 
+    # ⚠️ IMPORTANT: Configuration du tokenizer AVANT toute utilisation
+    # Configuration M2M vs NLLB
+    if is_m2m(model_name):
+        src = NLLB_TO_M2M.get(src_code, "auto")
+        tgt = NLLB_TO_M2M.get(tgt_code, "en")
+        if hasattr(tokenizer, "src_lang"):
+            tokenizer.src_lang = src
+        if hasattr(tokenizer, "tgt_lang"):
+            tokenizer.tgt_lang = tgt
+        forced_bos = tokenizer.get_lang_id(tgt) if hasattr(tokenizer, "get_lang_id") else None
+        print(f"[M2M] src={src_code}→{src}, tgt={tgt_code}→{tgt}, forced_bos={forced_bos}")
+    else:
+        # Pour NLLB, il faut absolument configurer src_lang et tgt_lang
+        if hasattr(tokenizer, "src_lang"):
+            tokenizer.src_lang = src_code
+        if hasattr(tokenizer, "tgt_lang"):
+            tokenizer.tgt_lang = tgt_code
+        # Récupérer le forced_bos_token_id pour la langue cible
+        forced_bos = None
+        if hasattr(tokenizer, "lang_code_to_id") and tgt_code in tokenizer.lang_code_to_id:
+            forced_bos = tokenizer.lang_code_to_id[tgt_code]
+        print(f"[NLLB] src={src_code}, tgt={tgt_code}, forced_bos={forced_bos}")
+
     def _encode(_texts, _max_len=MAX_TOKENS_PER_CHUNK):
         enc = tokenizer(_texts, return_tensors="pt", padding=True, truncation=True, max_length=_max_len)
         if device.type == "cuda":
@@ -560,22 +583,6 @@ def translate_batch_generic(
     if (src_code or "").startswith("rus_"):
         genp.setdefault("num_beams", 1)
         factor = min(factor, 1.15)
-
-    # Configuration M2M vs NLLB
-    if is_m2m(model_name):
-        src = NLLB_TO_M2M.get(src_code, "auto")
-        tgt = NLLB_TO_M2M.get(tgt_code, "en")
-        if hasattr(tokenizer, "src_lang"):
-            tokenizer.src_lang = src
-        if hasattr(tokenizer, "tgt_lang"):
-            tokenizer.tgt_lang = tgt
-        forced_bos = tokenizer.get_lang_id(tgt) if hasattr(tokenizer, "get_lang_id") else None
-    else:
-        if hasattr(tokenizer, "src_lang"):
-            tokenizer.src_lang = src_code
-        if hasattr(tokenizer, "tgt_lang"):
-            tokenizer.tgt_lang = tgt_code
-        forced_bos = tokenizer.lang_code_to_id[tgt_code] if hasattr(tokenizer, "lang_code_to_id") and tgt_code in tokenizer.lang_code_to_id else None
 
     dyn_new = dynamic_max_new_tokens(tokenizer, model_cfg, texts, factor=factor, floor=MIN_NEW_TOKENS)
     enc = _encode(texts)
@@ -700,6 +707,7 @@ class ExcelTranslator:
 
         for src_lang, idx_list in groups.items():
             self._update_progress(f"🌐 Traduction {src_lang} → {self.config.target_lang} ({len(idx_list)} segments)")
+            print(f"[DEBUG] Source détectée: {src_lang}, Cible: {self.config.target_lang}")
             k = 0
             group_texts = [work_items[idx][2] for idx in idx_list]
 
@@ -854,6 +862,7 @@ class DocxTranslator:
 
         for src_lang, idx_list in groups.items():
             self._update_progress(f"🌐 Traduction {src_lang} → {self.config.target_lang} ({len(idx_list)} segments)")
+            print(f"[DEBUG] Source détectée: {src_lang}, Cible: {self.config.target_lang}")
             k = 0
             group_texts = [work_items[idx][2] for idx in idx_list]
 

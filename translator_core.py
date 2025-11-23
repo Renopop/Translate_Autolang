@@ -132,13 +132,16 @@ class TranslatorConfig:
         batch_size: int = DEFAULT_BATCH_SIZE,
         preset: str = "Quality+",
         offline_mode: bool = False,
-        cache_dir: Optional[str] = None
+        cache_dir: Optional[str] = None,
+        quantization: str = "none"
     ):
         # Validation des paramètres obligatoires
         if not model_name:
             raise ValueError("model_name cannot be None or empty")
         if not target_lang:
             raise ValueError("target_lang cannot be None or empty")
+        if quantization not in ["none", "int8", "int4"]:
+            raise ValueError("quantization must be 'none', 'int8', or 'int4'")
 
         self.model_name = model_name
         self.target_lang = target_lang
@@ -146,6 +149,7 @@ class TranslatorConfig:
         self.preset = preset
         self.offline_mode = offline_mode
         self.cache_dir = cache_dir
+        self.quantization = quantization
 
         # Appliquer la configuration offline
         global OFFLINE_MODE, MODELS_CACHE_DIR
@@ -503,21 +507,38 @@ def chunk_by_tokens(text: str, tokenizer, max_tokens: int = MAX_TOKENS_PER_CHUNK
         chunks.append(" ".join(buf).strip())
     return chunks
 
-def dynamic_max_new_tokens(tokenizer, model_cfg, texts, factor=1.25, floor=50) -> int:
-    """Calcule dynamiquement le max_new_tokens"""
+def dynamic_max_new_tokens(tokenizer, model_cfg, texts, factor=1.25, floor=50, max_ceiling=512) -> int:
+    """
+    Calcule dynamiquement le max_new_tokens
+
+    Args:
+        tokenizer: Tokenizer du modèle
+        model_cfg: Configuration du modèle
+        texts: Liste des textes à traduire
+        factor: Facteur de multiplication (1.25-1.30)
+        floor: Minimum de tokens
+        max_ceiling: Plafond maximum absolu (512 par défaut pour éviter OOM)
+    """
     max_in = 0
     for t in texts:
         n = len(tokenizer(t, add_special_tokens=False).input_ids)
         if n > max_in:
             max_in = n
+
     ceilings = []
     for attr in ("max_length", "max_position_embeddings", "max_target_positions"):
         v = getattr(model_cfg, attr, None)
         if isinstance(v, int) and v > 0:
             ceilings.append(v)
-    ceiling = min([1024] + ceilings)
+
+    # Limiter le plafond pour éviter OOM (512 au lieu de 1024)
+    ceiling = min([max_ceiling] + ceilings)
     new_tokens = int(max(floor, min(int(max_in * factor), ceiling)))
-    return max(floor, min(new_tokens, ceiling - 1))
+    result = max(floor, min(new_tokens, ceiling - 1))
+
+    print(f"  [MAX_NEW_TOKENS] Input: {max_in} tokens → Output ceiling: {result} tokens (factor={factor:.2f})")
+
+    return result
 
 # =========================
 #    CHARGEMENT MODÈLES
@@ -561,23 +582,119 @@ def _resolve_local_repo(repo_or_path: str) -> str:
 
     return repo_or_path
 
-def load_model(model_name: str, device: torch.device):
-    """Charge un modèle de traduction"""
+def load_model(model_name: str, device: torch.device, quantization: str = "none"):
+    """
+    Charge un modèle de traduction avec option de quantization
+
+    Args:
+        model_name: Nom du modèle HuggingFace
+        device: Device torch (cuda/cpu)
+        quantization: Type de quantization ("none", "int8", "int4")
+    """
     print(f"🔧 Chargement modèle : {model_name}")
+    if quantization != "none":
+        print(f"⚡ Quantization activée : {quantization}")
+
     tp = _tp_kwargs()
     resolved = _resolve_local_repo(model_name)
 
     tokenizer = AutoTokenizer.from_pretrained(resolved, **tp)
-    model = AutoModelForSeq2SeqLM.from_pretrained(
-        resolved,
-        torch_dtype=(torch.bfloat16 if device.type == "cuda" else None),
-        attn_implementation="sdpa",
-        **tp
-    )
+
+    # Configuration de base
+    load_kwargs = {**tp}
+    using_quantization = False
+
+    if quantization == "int8" and device.type == "cuda":
+        # Quantization int8 avec bitsandbytes
+        try:
+            import bitsandbytes as bnb
+            from transformers import BitsAndBytesConfig
+
+            print(f"   bitsandbytes version: {bnb.__version__}")
+            print(f"   CUDA available: {torch.cuda.is_available()}")
+            print(f"   CUDA version: {torch.version.cuda}")
+
+            quantization_config = BitsAndBytesConfig(
+                load_in_8bit=True,
+                llm_int8_threshold=6.0,
+                llm_int8_has_fp16_weight=False
+            )
+            load_kwargs["quantization_config"] = quantization_config
+            load_kwargs["device_map"] = "auto"
+            using_quantization = True
+            print(f"✅ Configuration int8 appliquée (réduction VRAM ~50%)")
+
+        except ImportError as e:
+            print(f"⚠️ bitsandbytes non disponible: {e}")
+            print(f"   Installez avec: pip install bitsandbytes")
+            quantization = "none"
+        except Exception as e:
+            print(f"⚠️ Erreur configuration int8: {e}")
+            quantization = "none"
+
+    elif quantization == "int4" and device.type == "cuda":
+        # Quantization int4 avec bitsandbytes
+        try:
+            import bitsandbytes as bnb
+            from transformers import BitsAndBytesConfig
+
+            print(f"   bitsandbytes version: {bnb.__version__}")
+            print(f"   CUDA available: {torch.cuda.is_available()}")
+            print(f"   CUDA version: {torch.version.cuda}")
+
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4"
+            )
+            load_kwargs["quantization_config"] = quantization_config
+            load_kwargs["device_map"] = "auto"
+            using_quantization = True
+            print(f"✅ Configuration int4 appliquée (réduction VRAM ~75%)")
+
+        except ImportError as e:
+            print(f"⚠️ bitsandbytes non disponible: {e}")
+            print(f"   Installez avec: pip install bitsandbytes")
+            quantization = "none"
+        except Exception as e:
+            print(f"⚠️ Erreur configuration int4: {e}")
+            quantization = "none"
+
+    # Configuration pour chargement standard
+    if quantization == "none":
+        load_kwargs["torch_dtype"] = (torch.bfloat16 if device.type == "cuda" else None)
+        # Avec RTX 4090, utiliser flash attention si disponible
+        load_kwargs["attn_implementation"] = "sdpa"
+
+    try:
+        print(f"📥 Téléchargement/chargement du modèle...")
+        model = AutoModelForSeq2SeqLM.from_pretrained(resolved, **load_kwargs)
+        print(f"✅ Modèle chargé avec succès")
+    except Exception as e:
+        print(f"❌ Erreur lors du chargement: {e}")
+        print(f"   Tentative de chargement sans quantization...")
+        # Fallback: chargement sans quantization
+        load_kwargs = {
+            "torch_dtype": (torch.bfloat16 if device.type == "cuda" else None),
+            "attn_implementation": "sdpa",
+            **tp
+        }
+        model = AutoModelForSeq2SeqLM.from_pretrained(resolved, **load_kwargs)
+        using_quantization = False
+        quantization = "none"
 
     model.eval()
-    if device.type == "cuda":
+
+    # Déplacement vers le device seulement si pas de quantization (device_map gère déjà)
+    if not using_quantization and device.type == "cuda":
+        print(f"📍 Déplacement du modèle vers {device}...")
         model.to(device)
+
+    # Affichage de la VRAM utilisée
+    if device.type == "cuda":
+        print_vram_state("POST-LOAD")
+
     return tokenizer, model
 
 def get_fallback_tokenizer_model(src_code: str, tgt_code: str, device: torch.device):
@@ -815,16 +932,35 @@ def translate_batch_generic(
     return tokenizer.batch_decode(out_ids, skip_special_tokens=True)
 
 def suggest_next_batch_size(curr_bs: int, free_mib: int, max_bs_cap: int = 1024) -> int:
-    """Suggère la taille de batch suivante"""
-    if free_mib >= 18000:
-        return min(curr_bs + 64, max_bs_cap)
-    if free_mib >= 12000:
-        return min(curr_bs + 32, max_bs_cap)
-    if free_mib >= 8000:
-        return curr_bs
-    if free_mib >= 4000:
-        return max(MIN_BATCH_SIZE, int(curr_bs * 0.75))
-    return max(MIN_BATCH_SIZE, curr_bs // 2)
+    """
+    Suggère la taille de batch suivante basée sur la VRAM disponible
+
+    Args:
+        curr_bs: Batch size actuel
+        free_mib: VRAM libre en MiB
+        max_bs_cap: Plafond maximum du batch size
+
+    Returns:
+        Nouveau batch size suggéré
+    """
+    # Avec beaucoup de VRAM, on peut augmenter
+    if free_mib >= 18000:  # > 18 GB libre
+        new_bs = min(curr_bs + 64, max_bs_cap)
+    elif free_mib >= 12000:  # 12-18 GB libre
+        new_bs = min(curr_bs + 32, max_bs_cap)
+    elif free_mib >= 8000:  # 8-12 GB libre
+        new_bs = curr_bs  # Stable
+    elif free_mib >= 4000:  # 4-8 GB libre
+        new_bs = max(MIN_BATCH_SIZE, int(curr_bs * 0.75))  # Réduire de 25%
+    elif free_mib >= 2000:  # 2-4 GB libre
+        new_bs = max(MIN_BATCH_SIZE, curr_bs // 2)  # Réduire de 50%
+    else:  # < 2 GB libre (critique)
+        new_bs = MIN_BATCH_SIZE  # Minimum absolu
+
+    if new_bs != curr_bs:
+        print(f"  [BATCH SIZE] Adjusted: {curr_bs} → {new_bs} (free VRAM: {free_mib} MiB)")
+
+    return new_bs
 
 # =========================
 #    CLASSE PRINCIPALE
@@ -850,10 +986,16 @@ class ExcelTranslator:
     def load_model(self):
         """Charge le modèle de traduction"""
         self._update_progress(f"🔧 Chargement du modèle {self.config.model_name}...")
+        if self.config.quantization != "none":
+            self._update_progress(f"⚡ Quantization {self.config.quantization} activée")
         # Purge VRAM avant chargement pour maximiser la mémoire disponible
         purge_vram(sync=True)
         print_vram_state("VRAM avant chargement modèle")
-        self.tokenizer, self.model = load_model(self.config.model_name, self.device)
+        self.tokenizer, self.model = load_model(
+            self.config.model_name,
+            self.device,
+            quantization=self.config.quantization
+        )
         self.model_cfg = self.model.config
         purge_vram(sync=True)
         print_vram_state("VRAM après chargement modèle")
@@ -929,6 +1071,11 @@ class ExcelTranslator:
                         if retry_count > 0 or k == 0:
                             purge_vram(sync=True)
 
+                        # Log VRAM avant traduction
+                        if k == 0 or retry_count > 0:
+                            vram_free = free_vram_mib()
+                            print(f"  [BATCH] Processing {bs} segments (VRAM free: {vram_free} MiB)")
+
                         out_txts = translate_batch_generic(
                             self.config.model_name, self.tokenizer, self.model, self.device,
                             src_lang, self.config.target_lang, batch_texts, self.model_cfg,
@@ -952,19 +1099,23 @@ class ExcelTranslator:
                     except RuntimeError as e:
                         if "out of memory" in str(e).lower():
                             retry_count += 1
+                            vram_free = free_vram_mib()
                             purge_vram(sync=True)
 
                             if retry_count >= max_retries:
                                 # Dernier recours: réduire batch size et réessayer
+                                old_batch_size = batch_size
                                 batch_size = max(MIN_BATCH_SIZE, batch_size // 2)
                                 bs = min(batch_size, len(group_texts) - k)
                                 batch_texts = group_texts[k:k + bs]
-                                self._update_progress(f"⚠️ OOM persistant - Réduction batch à {batch_size}")
+                                self._update_progress(f"⚠️ OOM persistant - Réduction batch {old_batch_size}→{batch_size} (VRAM libre: {vram_free} MiB)")
+                                print(f"  [OOM] Batch size reduced: {old_batch_size} → {batch_size}")
                                 retry_count = 0  # Reset pour nouveau batch size
                                 if bs == 1 and retry_count >= max_retries:
-                                    raise Exception(f"Impossible de traduire même avec batch_size=1. GPU trop faible ou texte trop long.")
+                                    raise Exception(f"Impossible de traduire même avec batch_size=1. GPU trop faible ou texte trop long. VRAM libre: {vram_free} MiB")
                             else:
-                                self._update_progress(f"⚠️ OOM - Tentative {retry_count}/{max_retries}")
+                                self._update_progress(f"⚠️ OOM - Tentative {retry_count}/{max_retries} (batch={bs}, VRAM={vram_free} MiB)")
+                                print(f"  [OOM] Retry {retry_count}/{max_retries} with batch_size={bs}, VRAM free: {vram_free} MiB")
                                 time.sleep(1)  # Pause courte pour laisser GPU se vider
                         else:
                             raise
@@ -1025,10 +1176,16 @@ class DocxTranslator:
     def load_model(self):
         """Charge le modèle de traduction"""
         self._update_progress(f"🔧 Chargement du modèle {self.config.model_name}...")
+        if self.config.quantization != "none":
+            self._update_progress(f"⚡ Quantization {self.config.quantization} activée")
         # Purge VRAM avant chargement pour maximiser la mémoire disponible
         purge_vram(sync=True)
         print_vram_state("VRAM avant chargement modèle")
-        self.tokenizer, self.model = load_model(self.config.model_name, self.device)
+        self.tokenizer, self.model = load_model(
+            self.config.model_name,
+            self.device,
+            quantization=self.config.quantization
+        )
         self.model_cfg = self.model.config
         purge_vram(sync=True)
         print_vram_state("VRAM après chargement modèle")
@@ -1110,6 +1267,11 @@ class DocxTranslator:
                         if retry_count > 0 or k == 0:
                             purge_vram(sync=True)
 
+                        # Log VRAM avant traduction
+                        if k == 0 or retry_count > 0:
+                            vram_free = free_vram_mib()
+                            print(f"  [BATCH] Processing {bs} segments (VRAM free: {vram_free} MiB)")
+
                         out_txts = translate_batch_generic(
                             self.config.model_name, self.tokenizer, self.model, self.device,
                             src_lang, self.config.target_lang, batch_texts, self.model_cfg,
@@ -1133,19 +1295,23 @@ class DocxTranslator:
                     except RuntimeError as e:
                         if "out of memory" in str(e).lower():
                             retry_count += 1
+                            vram_free = free_vram_mib()
                             purge_vram(sync=True)
 
                             if retry_count >= max_retries:
                                 # Dernier recours: réduire batch size et réessayer
+                                old_batch_size = batch_size
                                 batch_size = max(MIN_BATCH_SIZE, batch_size // 2)
                                 bs = min(batch_size, len(group_texts) - k)
                                 batch_texts = group_texts[k:k + bs]
-                                self._update_progress(f"⚠️ OOM persistant - Réduction batch à {batch_size}")
+                                self._update_progress(f"⚠️ OOM persistant - Réduction batch {old_batch_size}→{batch_size} (VRAM libre: {vram_free} MiB)")
+                                print(f"  [OOM] Batch size reduced: {old_batch_size} → {batch_size}")
                                 retry_count = 0  # Reset pour nouveau batch size
                                 if bs == 1 and retry_count >= max_retries:
-                                    raise Exception(f"Impossible de traduire même avec batch_size=1. GPU trop faible ou texte trop long.")
+                                    raise Exception(f"Impossible de traduire même avec batch_size=1. GPU trop faible ou texte trop long. VRAM libre: {vram_free} MiB")
                             else:
-                                self._update_progress(f"⚠️ OOM - Tentative {retry_count}/{max_retries}")
+                                self._update_progress(f"⚠️ OOM - Tentative {retry_count}/{max_retries} (batch={bs}, VRAM={vram_free} MiB)")
+                                print(f"  [OOM] Retry {retry_count}/{max_retries} with batch_size={bs}, VRAM free: {vram_free} MiB")
                                 time.sleep(1)  # Pause courte pour laisser GPU se vider
                         else:
                             raise

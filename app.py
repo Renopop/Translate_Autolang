@@ -18,6 +18,7 @@ from translator_core import (
     MODELS,
     LANG_CODES,
     get_gpu_info,
+    get_system_metrics,
     DEFAULT_BATCH_SIZE,
     purge_vram,
     print_vram_state
@@ -92,6 +93,64 @@ with st.sidebar:
         st.info(f"🔧 BF16: {'✅' if gpu['bf16'] else '❌'}")
     else:
         st.warning("⚠️ Mode CPU (plus lent)")
+
+    st.markdown("---")
+
+    # Monitoring système en temps réel
+    st.subheader("📊 Monitoring Système")
+
+    # Checkbox pour activer/désactiver le monitoring
+    enable_monitoring = st.checkbox("Activer le monitoring temps réel", value=False,
+                                    help="Affiche les métriques CPU/RAM/GPU/VRAM en temps réel (rafraîchissement toutes les 3s)")
+
+    if enable_monitoring:
+        # Récupérer les métriques
+        metrics = get_system_metrics()
+
+        # CPU
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(
+                label="🖥️ CPU",
+                value=f"{metrics['cpu_percent']:.1f}%",
+                help="Utilisation processeur"
+            )
+        with col2:
+            st.metric(
+                label="🧠 RAM",
+                value=f"{metrics['ram_used_gb']:.1f}/{metrics['ram_total_gb']:.1f} GB",
+                delta=f"{metrics['ram_percent']:.0f}%",
+                help="Mémoire RAM utilisée"
+            )
+
+        # GPU/VRAM (si disponible)
+        if metrics['gpu_available']:
+            st.markdown("---")
+            col3, col4 = st.columns(2)
+            with col3:
+                st.metric(
+                    label="🎮 GPU",
+                    value=f"{metrics['gpu_utilization']:.0f}%",
+                    delta=f"{metrics['gpu_temperature']}°C" if metrics['gpu_temperature'] > 0 else None,
+                    help="Utilisation GPU et température"
+                )
+            with col4:
+                st.metric(
+                    label="💾 VRAM",
+                    value=f"{metrics['vram_used_gb']:.1f}/{metrics['vram_total_gb']:.1f} GB",
+                    delta=f"{metrics['vram_percent']:.0f}%",
+                    help="Mémoire VRAM utilisée"
+                )
+
+            # Barre de progression VRAM
+            st.progress(metrics['vram_percent'] / 100, text=f"VRAM: {metrics['vram_percent']:.1f}%")
+
+        # Bouton de rafraîchissement manuel
+        if st.button("🔄 Rafraîchir", key="refresh_metrics"):
+            st.rerun()
+
+        # Note sur le rafraîchissement automatique
+        st.caption("💡 Astuce: Utilisez le menu ⋮ > Settings > Run on save pour un rafraîchissement automatique")
 
     st.markdown("---")
 

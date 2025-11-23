@@ -291,15 +291,45 @@ def detect_lang_nllb(text: str) -> str:
     s = text.strip()
     if not s:
         return "eng_Latn"
+
+    # Détection japonais : Hiragana ou Katakana
+    if re.search(r"[\u3040-\u309F\u30A0-\u30FF]", s):
+        print(f"[LANG DETECT] Japanese characters (Hiragana/Katakana) detected -> jpn_Jpan | Sample: {s[:50]}...")
+        return "jpn_Jpan"
+
+    # Détection arabe
     if re.search(r"[\u0600-\u06FF]", s):
         print(f"[LANG DETECT] Arabic characters detected -> ara_Arab")
         return "ara_Arab"
+
+    # Détection cyrillique (russe)
     if re.search(r"[\u0400-\u04FF]", s):
         print(f"[LANG DETECT] Cyrillic characters detected -> rus_Cyrl")
         return "rus_Cyrl"
+
+    # Détection coréen (Hangul)
+    if re.search(r"[\uAC00-\uD7AF\u1100-\u11FF]", s):
+        print(f"[LANG DETECT] Korean characters (Hangul) detected -> kor_Hang | Sample: {s[:50]}...")
+        return "kor_Hang"
+
+    # CJK characters sans Hiragana/Katakana -> probablement chinois, mais vérifier avec langdetect
     if re.search(r"[\u4E00-\u9FFF]", s):
-        print(f"[LANG DETECT] Chinese characters detected -> zho_Hans")
+        head = s[:160]
+        try:
+            iso2 = _detect_iso2_cached(head)
+            # Si langdetect dit japonais mais pas de Hiragana/Katakana, c'est probablement du chinois
+            if iso2 == "ja":
+                print(f"[LANG DETECT] CJK + langdetect=ja but no kana -> likely Chinese -> zho_Hans")
+                return "zho_Hans"
+            elif iso2 == "zh-cn" or iso2 == "zh":
+                print(f"[LANG DETECT] Chinese characters + langdetect={iso2} -> zho_Hans")
+                return "zho_Hans"
+        except Exception as e:
+            print(f"[LANG DETECT] CJK characters detected, langdetect failed -> defaulting to zho_Hans")
+            pass
         return "zho_Hans"
+
+    # Utiliser langdetect pour les autres langues
     head = s[:160]
     detected_lang = None
     try:
@@ -312,9 +342,12 @@ def detect_lang_nllb(text: str) -> str:
     except Exception as e:
         print(f"[LANG DETECT] langdetect failed: {e}")
         pass
+
+    # Fallback basé sur des indices
     if ISO_HINT_EN.search(s):
         print(f"[LANG DETECT] English hints detected -> eng_Latn | Sample: {s[:50]}...")
         return "eng_Latn"
+
     print(f"[LANG DETECT] Fallback to fra_Latn | Sample: {s[:50]}...")
     return "fra_Latn"
 

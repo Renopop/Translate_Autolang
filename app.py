@@ -237,15 +237,22 @@ if uploaded_file is not None:
                     tmp_input.write(uploaded_file.getvalue())
                     input_path = tmp_input.name
 
+                # Récupération du code de langue
+                target_lang_code = LANG_CODES.get(target_lang)
+                if not target_lang_code:
+                    st.error(f"❌ Erreur: Code de langue invalide pour '{target_lang}'")
+                    st.stop()
+
+                print(f"[DEBUG APP] target_lang='{target_lang}', code='{target_lang_code}'")
+
                 # Préparation du fichier de sortie
                 output_ext = '.xlsx' if is_excel else '.docx'
-                output_filename = f"{Path(uploaded_file.name).stem}_translated_{LANG_CODES[target_lang].split('_')[0]}{output_ext}"
+                output_filename = f"{Path(uploaded_file.name).stem}_translated_{target_lang_code.split('_')[0]}{output_ext}"
                 output_path = os.path.join(tempfile.gettempdir(), output_filename)
 
-                # Configuration du traducteur
                 config = TranslatorConfig(
                     model_name=MODELS[model_choice],
-                    target_lang=LANG_CODES[target_lang],
+                    target_lang=target_lang_code,
                     batch_size=batch_size,
                     preset=preset,
                     offline_mode=offline_mode,

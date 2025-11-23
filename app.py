@@ -125,12 +125,11 @@ with st.sidebar:
     # Batch size
     st.subheader("📦 Taille de batch")
     # Réduire le batch size par défaut pour éviter OOM
-    default_batch = min(DEFAULT_BATCH_SIZE, 64) if uploaded_file else DEFAULT_BATCH_SIZE
     batch_size = st.number_input(
         "Batch size",
         min_value=16,
         max_value=1024,
-        value=default_batch,
+        value=64,  # Valeur par défaut réduite pour éviter OOM
         step=16,
         help="Plus grand = plus rapide mais consomme plus de mémoire. Commencez petit (64) si vous avez des erreurs OOM."
     )

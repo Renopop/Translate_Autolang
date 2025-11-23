@@ -771,3 +771,149 @@ class ExcelTranslator:
 
         self._update_progress(f"✅ Traduction terminée: {output_path}", 100)
         purge_vram()
+
+
+# =========================
+#    DOCX TRANSLATOR
+# =========================
+
+class DocxTranslator:
+    """Traducteur de documents Word multilingue"""
+
+    def __init__(self, config: TranslatorConfig, progress_callback=None):
+        self.config = config
+        self.progress_callback = progress_callback
+        self.device = torch.device(f"cuda:{GPU_INDEX}") if torch.cuda.is_available() else torch.device("cpu")
+        self.tokenizer = None
+        self.model = None
+        self.model_cfg = None
+
+    def _update_progress(self, message: str, progress: float = 0):
+        """Met à jour la progression"""
+        if self.progress_callback:
+            self.progress_callback(message, progress)
+        print(message)
+
+    def load_model(self):
+        """Charge le modèle de traduction"""
+        self._update_progress(f"🔧 Chargement du modèle {self.config.model_name}...")
+        self.tokenizer, self.model = load_model(self.config.model_name, self.device)
+        self.model_cfg = self.model.config
+        self._update_progress("✅ Modèle chargé")
+
+    def translate_file(self, input_path: str, output_path: str):
+        """Traduit un fichier Word"""
+        from docx_handler import DocxProcessor
+
+        self._update_progress(f"📖 Lecture du document {input_path}...")
+
+        # Extraction des textes avec métadonnées
+        texts, metadata, handler = DocxProcessor.extract_texts_for_translation(input_path)
+
+        if not texts:
+            self._update_progress("ℹ️ Aucun texte à traduire dans le document")
+            handler.doc.save(output_path)
+            return
+
+        self._update_progress(f"🔍 Analyse: {len(texts)} segments à traduire...")
+
+        # Préparation des segments
+        work_items: List[Tuple[int, int, str, str]] = []
+        keep_original = set()
+
+        for i, text in enumerate(texts):
+            text = (text or "").strip()
+            if not text:
+                keep_original.add(i)
+                continue
+
+            src_code = detect_lang_nllb(text)
+            if same_language(src_code, self.config.target_lang):
+                keep_original.add(i)
+                continue
+
+            # Découper le texte en chunks si nécessaire
+            for j, chunk in enumerate(chunk_by_tokens(text, self.tokenizer, MAX_TOKENS_PER_CHUNK)):
+                work_items.append((i, j, chunk, src_code))
+
+        if not work_items:
+            self._update_progress("ℹ️ Aucune traduction nécessaire (texte déjà dans la langue cible)")
+            handler.doc.save(output_path)
+            return
+
+        # Groupement par langue source
+        groups: Dict[str, List[int]] = {}
+        for idx, (text_idx, order, chunk, src) in enumerate(work_items):
+            groups.setdefault(src, []).append(idx)
+
+        # Traduction
+        outputs = [None] * len(work_items)
+        batch_size = self.config.batch_size
+        total_segments = len(work_items)
+        processed = 0
+
+        for src_lang, idx_list in groups.items():
+            self._update_progress(f"🌐 Traduction {src_lang} → {self.config.target_lang} ({len(idx_list)} segments)")
+            k = 0
+            group_texts = [work_items[idx][2] for idx in idx_list]
+
+            specialist_cap = 1024 if ((src_lang, self.config.target_lang) in PAIR_SPECIALISTS) else 512
+
+            while k < len(group_texts):
+                free_mib = free_vram_mib()
+                batch_size = suggest_next_batch_size(batch_size, free_mib, max_bs_cap=specialist_cap)
+
+                bs = min(batch_size, len(group_texts) - k)
+                batch_texts = group_texts[k:k + bs]
+
+                # Traduction du batch
+                try:
+                    out_txts = translate_batch_generic(
+                        self.config.model_name, self.tokenizer, self.model, self.device,
+                        src_lang, self.config.target_lang, batch_texts, self.model_cfg,
+                        preset=self.config.preset
+                    )
+
+                    for j, txt in enumerate(out_txts):
+                        outputs[idx_list[k + j]] = txt
+
+                    k += bs
+                    processed += bs
+                    progress = (processed / total_segments) * 100
+                    self._update_progress(f"📊 Progression: {processed}/{total_segments} segments", progress)
+
+                    # Purge périodique
+                    if processed % PURGE_EVERY_N_BATCHES == 0:
+                        purge_vram()
+
+                except RuntimeError as e:
+                    if "out of memory" in str(e).lower():
+                        purge_vram()
+                        batch_size = max(MIN_BATCH_SIZE, batch_size // 2)
+                        self._update_progress(f"⚠️ OOM - Réduction batch size à {batch_size}")
+                        continue
+                    else:
+                        raise
+
+        # Reconstruction des textes traduits
+        self._update_progress("🔨 Reconstruction des textes...")
+        by_text_idx = {}
+        for (text_idx, order, _chunk, _src), txt in zip(work_items, outputs):
+            by_text_idx.setdefault(text_idx, {})[order] = txt
+
+        translated_texts = []
+        for i, original_text in enumerate(texts):
+            if i in keep_original:
+                translated_texts.append(original_text)
+            elif i not in by_text_idx:
+                translated_texts.append(original_text)
+            else:
+                parts = [by_text_idx[i][k] for k in sorted(by_text_idx[i].keys())]
+                translated_texts.append(" ".join(parts).strip())
+
+        # Application des traductions
+        self._update_progress("💾 Écriture du document traduit...")
+        DocxProcessor.apply_translations(handler, translated_texts, metadata, output_path)
+
+        self._update_progress(f"✅ Traduction terminée: {output_path}", 100)
+        purge_vram()

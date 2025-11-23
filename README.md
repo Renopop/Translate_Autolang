@@ -1,10 +1,12 @@
-# 🌐 Traducteur Excel Multilingue
+# 🌐 Traducteur Excel & Word Multilingue
 
-Application de traduction multilingue pour fichiers Excel utilisant les modèles de traduction neuronale NLLB-200 et M2M100.
+Application de traduction multilingue pour fichiers Excel et Word utilisant les modèles de traduction neuronale NLLB-200 et M2M100.
 
 ## ✨ Fonctionnalités
 
 - **Interface moderne Streamlit** : Interface web intuitive et moderne
+- **Support Excel & Word** : Traduit les fichiers .xlsx, .xls et .docx
+- **Préservation de la mise en forme** : Conserve le formatage des documents Word (gras, italique, couleurs, alignement)
 - **Support multi-langues** : Plus de 20 langues supportées
 - **Modèles de haute qualité** : NLLB-200 (600M, 1.3B) et M2M100 (1.2B)
 - **Optimisation GPU** : Support CUDA avec BF16 et SDPA/FlashAttention
@@ -70,16 +72,23 @@ L'application s'ouvrira automatiquement dans votre navigateur à l'adresse `http
 
 #### Traduction :
 
-1. Uploadez votre fichier Excel
+1. Uploadez votre fichier Excel (.xlsx, .xls) ou Word (.docx)
 2. Configurez les paramètres dans la barre latérale
 3. Cliquez sur "🚀 Lancer la traduction"
 4. Téléchargez le fichier traduit
 
-### Interface Tkinter (Ancienne version)
+### 📄 Support des documents Word (.docx)
 
-```bash
-python Translate_Autolang_GPU_CUDA_OFFLINE_optimized.py
-```
+L'application préserve la mise en forme des documents Word :
+
+- ✅ **Styles de texte** : Gras, italique, souligné
+- ✅ **Polices** : Nom, taille, couleur
+- ✅ **Alignement** : Gauche, centre, droite, justifié
+- ✅ **Tableaux** : Structure et contenu
+- ✅ **Paragraphes** : Espacement et structure
+- ✅ **Listes** : Puces et numérotation
+
+**Note** : Les images ne sont pas traduites mais sont préservées dans le document.
 
 ## 🎯 Langues supportées
 
@@ -89,9 +98,11 @@ Français, English, Español, Deutsch, Italiano, Português, Nederlands, Polski,
 
 ### Fichiers principaux
 
-- **app.py** : Interface Streamlit moderne
-- **translator_core.py** : Logique métier de traduction (séparée de l'UI)
-- **Translate_Autolang_GPU_CUDA_OFFLINE_optimized.py** : Version Tkinter originale
+- **app.py** : Interface Streamlit moderne (Excel & Word)
+- **translator_core.py** : Logique métier de traduction (ExcelTranslator & DocxTranslator)
+- **docx_handler.py** : Gestion des documents Word avec préservation de la mise en forme
+- **requirements.txt** : Liste des dépendances
+- **README.md** : Documentation complète
 
 ### Optimisations
 
@@ -100,6 +111,7 @@ Français, English, Español, Deutsch, Italiano, Português, Nederlands, Polski,
 - **Détection GPU** : Auto-tune des paramètres selon le GPU
 - **Cache modèles** : Les modèles spécialistes sont mis en cache
 - **Batch dynamique** : Ajustement automatique selon la VRAM disponible
+- **Préservation formatage** : Métadonnées de style pour documents Word
 
 ## ⚙️ Configuration GPU
 
@@ -169,6 +181,14 @@ cache_dir/
 
 ## 📝 Changelog
 
+### Version 2.1 (Support Word)
+- 📄 **Support des documents Word (.docx)**
+- 🎨 **Préservation de la mise en forme** (gras, italique, couleurs, polices, alignement)
+- 📊 **Support des tableaux** dans les documents Word
+- 🔧 Classe DocxTranslator dédiée
+- 📦 Module docx_handler pour la gestion des métadonnées
+- 📚 Documentation enrichie
+
 ### Version 2.0 (Streamlit)
 - ✨ Interface Streamlit moderne et intuitive
 - 🏗️ Refactoring complet du code
@@ -180,7 +200,7 @@ cache_dir/
 
 ### Version 1.0 (Tkinter)
 - Interface Tkinter fonctionnelle
-- Support multi-langues
+- Support multi-langues Excel
 - Optimisations GPU/CUDA
 - Mode hors-ligne
 
@@ -199,3 +219,4 @@ Ce projet est sous licence MIT.
 - Modèles OPUS-MT par Helsinki-NLP
 - Streamlit pour l'interface web
 - Hugging Face Transformers
+- python-docx pour la gestion des documents Word

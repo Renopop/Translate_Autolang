@@ -112,18 +112,87 @@ NLLB_TO_M2M = {
 }
 
 # ============================================
-#    OPTIMIZED PARAMETERS FOR RTX 4090
+#    AUTO-ADAPTIVE PARAMETERS (GPU-aware)
 # ============================================
 MAX_TOKENS_PER_CHUNK = 420
 DYNAMIC_FACTOR_OUT = 1.25
 MIN_NEW_TOKENS = 50
-DEFAULT_BATCH_SIZE = 512  # RTX 4090 can handle much larger batches
-MIN_BATCH_SIZE = 32  # Higher minimum for GPU efficiency
-PURGE_EVERY_N_BATCHES = 64  # Less frequent purging (was 16)
+MIN_BATCH_SIZE = 16  # Absolute minimum
+PURGE_EVERY_N_BATCHES = 64  # Less frequent purging
 GPU_INDEX = 0
 ENABLE_ULTRA = True
 USE_TORCH_COMPILE = True  # Enable torch.compile for 30-50% speedup
 COMPILE_MODE = "reduce-overhead"  # Options: "default", "reduce-overhead", "max-autotune"
+
+def get_optimal_batch_size(vram_total_mib: int = 0) -> int:
+    """
+    Calcule automatiquement le batch size optimal basé sur la VRAM disponible
+
+    Args:
+        vram_total_mib: VRAM totale en MiB (0 = auto-detect)
+
+    Returns:
+        Batch size optimal pour cette GPU
+    """
+    if vram_total_mib <= 0:
+        if torch.cuda.is_available():
+            try:
+                props = torch.cuda.get_device_properties(GPU_INDEX)
+                vram_total_mib = props.total_memory // (1024 * 1024)
+            except Exception:
+                vram_total_mib = 8000  # Default: assume 8GB
+        else:
+            return 32  # CPU mode: small batch
+
+    # Batch size scaling based on VRAM
+    # Formula: base + (vram_gb - 4) * scale_factor
+    # Minimum 4GB required for reasonable performance
+    vram_gb = vram_total_mib / 1024
+
+    if vram_gb >= 24:      # RTX 4090, 3090, A6000 (24GB)
+        return 512
+    elif vram_gb >= 16:    # RTX 4080, A4000 (16GB)
+        return 384
+    elif vram_gb >= 12:    # RTX 3080 12GB, RTX 4070 Ti
+        return 256
+    elif vram_gb >= 10:    # RTX 3080 10GB
+        return 192
+    elif vram_gb >= 8:     # RTX 3070, 3060 Ti, GTX 1080 (8GB)
+        return 128
+    elif vram_gb >= 6:     # RTX 3060, GTX 1060 (6GB)
+        return 64
+    elif vram_gb >= 4:     # GTX 1650, older cards (4GB)
+        return 32
+    else:                  # < 4GB: very limited
+        return 16
+
+def get_gpu_tier() -> str:
+    """
+    Détermine le tier de la GPU pour ajuster les paramètres
+
+    Returns:
+        "high" (>=16GB), "medium" (8-16GB), "low" (4-8GB), "minimal" (<4GB), "cpu"
+    """
+    if not torch.cuda.is_available():
+        return "cpu"
+
+    try:
+        props = torch.cuda.get_device_properties(GPU_INDEX)
+        vram_gb = props.total_memory / (1024**3)
+
+        if vram_gb >= 16:
+            return "high"
+        elif vram_gb >= 8:
+            return "medium"
+        elif vram_gb >= 4:
+            return "low"
+        else:
+            return "minimal"
+    except Exception:
+        return "medium"  # Default assumption
+
+# Auto-detect optimal batch size at import time
+DEFAULT_BATCH_SIZE = get_optimal_batch_size()
 
 # Offline & Cache
 OFFLINE_MODE: bool = False
@@ -719,15 +788,30 @@ def load_model(model_name: str, device: torch.device, quantization: str = "none"
 
     # ============================================
     # TORCH.COMPILE - Major speedup (30-50%)
+    # Only for high-tier GPUs (Ampere+) to avoid compatibility issues
     # ============================================
-    if USE_TORCH_COMPILE and device.type == "cuda" and not using_quantization:
+    gpu_tier = get_gpu_tier()
+    should_compile = (
+        USE_TORCH_COMPILE and
+        device.type == "cuda" and
+        not using_quantization and
+        gpu_tier in ("high", "medium")  # Only compile on >=8GB GPUs
+    )
+
+    if should_compile:
         try:
-            print(f"🚀 Compilation du modèle avec torch.compile (mode={COMPILE_MODE})...")
-            # Use reduce-overhead for best latency on inference
-            model = torch.compile(model, mode=COMPILE_MODE, fullgraph=False)
-            print(f"✅ Modèle compilé - Première inférence sera plus lente (warmup)")
+            # Check compute capability (need SM 7.0+ for best results)
+            props = torch.cuda.get_device_properties(device)
+            compute_cap = props.major + props.minor / 10
+
+            if compute_cap >= 7.0:  # Volta and newer
+                print(f"🚀 Compilation du modèle (mode={COMPILE_MODE})...")
+                model = torch.compile(model, mode=COMPILE_MODE, fullgraph=False)
+                print(f"✅ Modèle compilé - Warmup au premier batch")
+            else:
+                print(f"ℹ️ torch.compile ignoré (GPU SM {compute_cap:.1f} < 7.0)")
         except Exception as e:
-            print(f"⚠️ torch.compile failed: {e} - using uncompiled model")
+            print(f"⚠️ torch.compile failed: {e}")
 
     # Enable CUDA graph capture for repeated inference patterns
     if device.type == "cuda":
@@ -943,34 +1027,53 @@ def translate_batch_generic(
 
 def suggest_next_batch_size(curr_bs: int, free_mib: int, max_bs_cap: int = 1024, avg_input_length: int = 0) -> int:
     """
-    Suggère la taille de batch suivante - OPTIMIZED for RTX 4090 (24GB VRAM)
+    Suggère la taille de batch suivante - AUTO-ADAPTIVE à toute GPU
 
-    More aggressive batch sizing for high-end GPUs
+    Utilise des pourcentages de VRAM libre plutôt que des seuils absolus
     """
-    # Adjust cap based on input length
+    # Get total VRAM for percentage calculations
+    total_vram_mib = 8000  # Default assumption
+    if torch.cuda.is_available():
+        try:
+            _, total_b = torch.cuda.mem_get_info(GPU_INDEX)
+            total_vram_mib = total_b // (1024 * 1024)
+        except Exception:
+            pass
+
+    # Calculate percentage of VRAM free
+    free_percent = (free_mib / total_vram_mib) * 100 if total_vram_mib > 0 else 50
+
+    # Adjust cap based on input length (relative to GPU capability)
+    gpu_tier = get_gpu_tier()
     if avg_input_length > 0:
         if avg_input_length > 300:
-            max_bs_cap = min(max_bs_cap, 128)  # RTX 4090 can handle more
+            # Very long texts: strict cap
+            tier_caps = {"high": 128, "medium": 64, "low": 32, "minimal": 16, "cpu": 16}
+            max_bs_cap = min(max_bs_cap, tier_caps.get(gpu_tier, 64))
         elif avg_input_length > 200:
-            max_bs_cap = min(max_bs_cap, 256)
+            tier_caps = {"high": 256, "medium": 128, "low": 64, "minimal": 32, "cpu": 32}
+            max_bs_cap = min(max_bs_cap, tier_caps.get(gpu_tier, 128))
         elif avg_input_length > 100:
-            max_bs_cap = min(max_bs_cap, 384)
+            tier_caps = {"high": 384, "medium": 192, "low": 96, "minimal": 48, "cpu": 48}
+            max_bs_cap = min(max_bs_cap, tier_caps.get(gpu_tier, 192))
 
-    # RTX 4090 optimized thresholds (24GB VRAM)
-    if free_mib >= 20000:  # > 20 GB libre - very aggressive
-        new_bs = min(curr_bs + 128, max_bs_cap)
-    elif free_mib >= 16000:  # 16-20 GB libre
-        new_bs = min(curr_bs + 64, max_bs_cap)
-    elif free_mib >= 12000:  # 12-16 GB libre
-        new_bs = min(curr_bs + 32, max_bs_cap)
-    elif free_mib >= 8000:  # 8-12 GB libre
-        new_bs = min(curr_bs, max_bs_cap)
-    elif free_mib >= 4000:  # 4-8 GB libre
-        new_bs = max(MIN_BATCH_SIZE, int(curr_bs * 0.8))
-    else:  # < 4 GB libre
-        new_bs = max(MIN_BATCH_SIZE, curr_bs // 2)
+    # Adaptive batch sizing based on % of VRAM free
+    if free_percent >= 80:  # > 80% VRAM libre - très agressif
+        increment = {"high": 128, "medium": 64, "low": 32, "minimal": 16, "cpu": 8}
+        new_bs = min(curr_bs + increment.get(gpu_tier, 32), max_bs_cap)
+    elif free_percent >= 60:  # 60-80% libre
+        increment = {"high": 64, "medium": 32, "low": 16, "minimal": 8, "cpu": 4}
+        new_bs = min(curr_bs + increment.get(gpu_tier, 16), max_bs_cap)
+    elif free_percent >= 40:  # 40-60% libre
+        new_bs = min(curr_bs, max_bs_cap)  # Stable
+    elif free_percent >= 25:  # 25-40% libre
+        new_bs = max(MIN_BATCH_SIZE, int(curr_bs * 0.8))  # Reduce 20%
+    elif free_percent >= 15:  # 15-25% libre
+        new_bs = max(MIN_BATCH_SIZE, curr_bs // 2)  # Reduce 50%
+    else:  # < 15% libre - critique
+        new_bs = MIN_BATCH_SIZE
 
-    log_verbose(f"  [BATCH] {curr_bs}→{new_bs} (VRAM:{free_mib}MB)")
+    log_verbose(f"  [BATCH] {curr_bs}→{new_bs} (VRAM:{free_percent:.0f}% free, tier:{gpu_tier})")
     return new_bs
 
 # =========================

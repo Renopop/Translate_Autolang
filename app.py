@@ -209,20 +209,20 @@ with st.sidebar:
     preset = st.radio(
         "Qualité vs Vitesse",
         options=["Speed", "Balanced", "Quality+"],
-        index=2,
-        help="Speed: plus rapide | Balanced: équilibré | Quality+: meilleure qualité"
+        index=1,  # Default to Balanced for RTX 4090 (best speed/quality ratio)
+        help="Speed: très rapide (1 beam) | Balanced: bon équilibre (2 beams) | Quality+: meilleure qualité (3 beams)"
     )
 
     # Batch size
     st.subheader("📦 Taille de batch")
-    # Réduire le batch size par défaut pour éviter OOM
+    # RTX 4090 optimized: Higher default batch size
     batch_size = st.number_input(
         "Batch size",
-        min_value=16,
+        min_value=32,
         max_value=1024,
-        value=64,  # Valeur par défaut réduite pour éviter OOM
-        step=16,
-        help="Plus grand = plus rapide mais consomme plus de mémoire. Commencez petit (64) si vous avez des erreurs OOM."
+        value=256,  # RTX 4090 can handle larger batches
+        step=32,
+        help="RTX 4090: Utilisez 256-512 pour de meilleures performances. Réduisez si OOM."
     )
 
     st.markdown("---")

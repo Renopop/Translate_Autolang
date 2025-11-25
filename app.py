@@ -20,6 +20,8 @@ from translator_core import (
     get_gpu_info,
     get_system_metrics,
     DEFAULT_BATCH_SIZE,
+    get_optimal_batch_size,
+    get_gpu_tier,
     purge_vram,
     print_vram_state
 )
@@ -209,20 +211,34 @@ with st.sidebar:
     preset = st.radio(
         "Qualité vs Vitesse",
         options=["Speed", "Balanced", "Quality+"],
-        index=2,
-        help="Speed: plus rapide | Balanced: équilibré | Quality+: meilleure qualité"
+        index=1,  # Default to Balanced for RTX 4090 (best speed/quality ratio)
+        help="Speed: très rapide (1 beam) | Balanced: bon équilibre (2 beams) | Quality+: meilleure qualité (3 beams)"
     )
 
-    # Batch size
+    # Batch size - AUTO-ADAPTIVE
     st.subheader("📦 Taille de batch")
-    # Réduire le batch size par défaut pour éviter OOM
+
+    # Auto-detect optimal batch size based on GPU
+    auto_batch_size = get_optimal_batch_size()
+    gpu_tier = get_gpu_tier()
+
+    # Show recommendation
+    tier_info = {
+        "high": "🚀 GPU haut de gamme (≥16GB)",
+        "medium": "✅ GPU milieu de gamme (8-16GB)",
+        "low": "⚠️ GPU entrée de gamme (4-8GB)",
+        "minimal": "⚡ GPU limitée (<4GB)",
+        "cpu": "🖥️ Mode CPU"
+    }
+    st.caption(f"{tier_info.get(gpu_tier, 'GPU')} → Batch recommandé: **{auto_batch_size}**")
+
     batch_size = st.number_input(
         "Batch size",
         min_value=16,
         max_value=1024,
-        value=64,  # Valeur par défaut réduite pour éviter OOM
+        value=auto_batch_size,  # Auto-detected optimal value
         step=16,
-        help="Plus grand = plus rapide mais consomme plus de mémoire. Commencez petit (64) si vous avez des erreurs OOM."
+        help=f"Valeur auto-détectée: {auto_batch_size}. Augmentez pour plus de vitesse, réduisez si OOM."
     )
 
     st.markdown("---")

@@ -1,29 +1,43 @@
-# Core dependencies
-torch>=2.0.0
-transformers>=4.30.0
-pandas>=1.5.0
-openpyxl>=3.0.0
-xlsxwriter>=3.0.0
+# ============================================
+# Translate Autolang - Requirements
+# Optimized for RTX 4090 and auto-adaptive GPU
+# ============================================
 
-# Model quantization (optional but recommended for large models)
+# Core PyTorch (CUDA 11.8 or 12.1 recommended)
+torch>=2.1.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
+
+# Transformers & Model Loading
+transformers>=4.36.0
+accelerate>=0.25.0
+sentencepiece>=0.1.99
+
+# Model Quantization (optional - reduces VRAM by 50-75%)
 bitsandbytes>=0.41.0
-accelerate>=0.20.0
 
-# Word document processing
+# Excel Processing
+pandas>=2.0.0
+openpyxl>=3.1.0
+xlsxwriter>=3.1.0
+
+# Word Document Processing
 python-docx>=0.8.11
+lxml>=4.9.0
 
-# Language detection
+# Language Detection
 langdetect>=1.0.9
 
-# Progress bars
-tqdm>=4.65.0
+# Streamlit Web UI
+streamlit>=1.29.0
 
-# Streamlit UI
-streamlit>=1.28.0
-
-# System monitoring (optional)
-psutil>=5.9.0
-nvidia-ml-py3>=7.352.0  # Pour monitoring GPU/VRAM/température
-
-# Additional utilities
+# Progress & Utilities
+tqdm>=4.66.0
 numpy>=1.24.0
+
+# System Monitoring
+psutil>=5.9.0
+pynvml>=11.5.0
+
+# Optional: For faster tokenization
+tokenizers>=0.15.0

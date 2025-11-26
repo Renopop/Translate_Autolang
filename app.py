@@ -251,19 +251,122 @@ with st.sidebar:
         help="Empêche tout téléchargement de modèles (nécessite des modèles pré-téléchargés)"
     )
 
-    # Dossier de cache
-    st.subheader("📁 Dossier de cache")
+    # Dossier de cache avec explorateur
+    st.subheader("📁 Dossier des modèles")
+
+    # Initialiser le chemin dans session_state
+    if 'cache_dir' not in st.session_state:
+        # Chemins par défaut selon l'OS
+        if os.name == 'nt':
+            default_paths = [
+                r"C:\IA Test\models",
+                os.path.join(os.path.expanduser("~"), ".cache", "huggingface"),
+                os.path.join(os.path.expanduser("~"), "models"),
+            ]
+        else:
+            default_paths = [
+                "/tmp/models",
+                os.path.join(os.path.expanduser("~"), ".cache", "huggingface"),
+                os.path.join(os.path.expanduser("~"), "models"),
+            ]
+        # Utiliser le premier chemin existant ou le premier par défaut
+        st.session_state.cache_dir = next((p for p in default_paths if os.path.isdir(p)), default_paths[0])
+
+    # Champ de saisie du chemin
     cache_dir = st.text_input(
-        "Chemin du dossier de cache",
-        value=r"C:\IA Test\models" if os.name == 'nt' else "/tmp/models",
-        help="Dossier où stocker/lire les modèles"
+        "Chemin du dossier",
+        value=st.session_state.cache_dir,
+        key="cache_dir_input",
+        help="Dossier où stocker/lire les modèles locaux"
     )
 
-    # Vérification du dossier
-    if cache_dir and os.path.isdir(cache_dir):
-        st.success(f"✅ Dossier valide")
+    # Mettre à jour session_state si modifié
+    if cache_dir != st.session_state.cache_dir:
+        st.session_state.cache_dir = cache_dir
+
+    # Boutons d'accès rapide
+    st.caption("📌 Accès rapide:")
+    quick_cols = st.columns(3)
+
+    with quick_cols[0]:
+        if st.button("🏠 Home", key="btn_home", use_container_width=True):
+            st.session_state.cache_dir = os.path.expanduser("~")
+            st.rerun()
+
+    with quick_cols[1]:
+        if st.button("📦 HF Cache", key="btn_hf", use_container_width=True):
+            hf_cache = os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+            st.session_state.cache_dir = hf_cache
+            st.rerun()
+
+    with quick_cols[2]:
+        if st.button("⬆️ Parent", key="btn_parent", use_container_width=True):
+            parent = os.path.dirname(st.session_state.cache_dir)
+            if parent:
+                st.session_state.cache_dir = parent
+                st.rerun()
+
+    # Navigation dans les sous-dossiers
+    current_path = st.session_state.cache_dir
+    if os.path.isdir(current_path):
+        try:
+            # Lister les sous-dossiers
+            subdirs = sorted([
+                d for d in os.listdir(current_path)
+                if os.path.isdir(os.path.join(current_path, d)) and not d.startswith('.')
+            ])
+
+            if subdirs:
+                st.caption("📂 Naviguer vers:")
+                selected_subdir = st.selectbox(
+                    "Sous-dossiers",
+                    options=["(sélectionner)"] + subdirs,
+                    key="subdir_select",
+                    label_visibility="collapsed"
+                )
+
+                if selected_subdir and selected_subdir != "(sélectionner)":
+                    new_path = os.path.join(current_path, selected_subdir)
+                    st.session_state.cache_dir = new_path
+                    st.rerun()
+
+            # Afficher les modèles détectés
+            files = os.listdir(current_path)
+            model_indicators = ['config.json', 'model.safetensors', 'pytorch_model.bin', 'tokenizer.json']
+            models_found = []
+
+            for item in files:
+                item_path = os.path.join(current_path, item)
+                if os.path.isdir(item_path):
+                    # Vérifier si c'est un dossier de modèle
+                    subfiles = os.listdir(item_path) if os.path.isdir(item_path) else []
+                    if any(ind in subfiles for ind in model_indicators):
+                        models_found.append(item)
+
+            if models_found:
+                st.success(f"✅ {len(models_found)} modèle(s) détecté(s)")
+                with st.expander("📋 Modèles trouvés"):
+                    for m in models_found[:10]:  # Limiter à 10
+                        st.write(f"• {m}")
+                    if len(models_found) > 10:
+                        st.write(f"... et {len(models_found) - 10} autres")
+            else:
+                st.info("📁 Dossier valide (aucun modèle détecté)")
+
+        except PermissionError:
+            st.warning("⚠️ Accès refusé à ce dossier")
+        except Exception as e:
+            st.warning(f"⚠️ Erreur: {str(e)}")
     elif cache_dir:
-        st.warning(f"⚠️ Dossier introuvable")
+        st.warning("⚠️ Dossier introuvable")
+        if st.button("📁 Créer le dossier", key="btn_create_dir"):
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+                st.session_state.cache_dir = cache_dir
+                st.success("✅ Dossier créé!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Erreur: {str(e)}")
 
     st.markdown("---")
 

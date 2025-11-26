@@ -1,20 +1,10 @@
 @echo off
 chcp 65001 >nul
-setlocal EnableDelayedExpansion
 
 echo ============================================
 echo    Translate Autolang - Mode Debug
 echo ============================================
 echo.
-
-:: Activer venv
-if exist "venv\Scripts\activate.bat" (
-    call venv\Scripts\activate.bat
-) else (
-    echo [ERREUR] venv non trouve - executez install.bat d'abord
-    pause
-    exit /b 1
-)
 
 echo [DEBUG] Informations systeme:
 echo ============================================

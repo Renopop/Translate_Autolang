@@ -1,22 +1,10 @@
 @echo off
 chcp 65001 >nul
-setlocal EnableDelayedExpansion
 
 echo ============================================
 echo    Translate Autolang - Lancement
 echo ============================================
 echo.
-
-:: Verifier que venv existe
-if not exist "venv\Scripts\activate.bat" (
-    echo [ERREUR] Environnement virtuel non trouve!
-    echo Veuillez d'abord executer install.bat
-    pause
-    exit /b 1
-)
-
-:: Activer venv
-call venv\Scripts\activate.bat
 
 :: Afficher info GPU
 echo [INFO] Detection du GPU...

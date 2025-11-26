@@ -1,6 +1,5 @@
 @echo off
 chcp 65001 >nul
-setlocal EnableDelayedExpansion
 
 echo ============================================
 echo    Translate Autolang - Installation
@@ -9,7 +8,7 @@ echo ============================================
 echo.
 
 :: Verifier Python
-echo [1/5] Verification de Python...
+echo [1/4] Verification de Python...
 python --version >nul 2>&1
 if errorlevel 1 (
     echo [ERREUR] Python n'est pas installe ou pas dans le PATH
@@ -22,7 +21,7 @@ echo       Python %PYVER% detecte
 
 :: Verifier CUDA
 echo.
-echo [2/5] Verification de CUDA...
+echo [2/4] Verification de CUDA...
 nvidia-smi >nul 2>&1
 if errorlevel 1 (
     echo [ATTENTION] nvidia-smi non trouve - Mode CPU sera utilise
@@ -34,31 +33,9 @@ if errorlevel 1 (
     set CUDA_AVAILABLE=1
 )
 
-:: Creer environnement virtuel
-echo.
-echo [3/5] Creation de l'environnement virtuel...
-if exist "venv" (
-    echo       Environnement virtuel existant detecte
-    choice /C ON /M "Voulez-vous le recreer (O=Oui, N=Non)"
-    if errorlevel 2 goto :skip_venv
-    echo       Suppression de l'ancien environnement...
-    rmdir /s /q venv
-)
-python -m venv venv
-if errorlevel 1 (
-    echo [ERREUR] Impossible de creer l'environnement virtuel
-    pause
-    exit /b 1
-)
-echo       Environnement virtuel cree
-
-:skip_venv
-:: Activer venv et installer pip
-echo.
-echo [4/5] Installation des dependances...
-call venv\Scripts\activate.bat
-
 :: Mise a jour pip
+echo.
+echo [3/4] Installation des dependances...
 python -m pip install --upgrade pip wheel setuptools >nul 2>&1
 
 :: Installer PyTorch avec CUDA
@@ -75,9 +52,9 @@ if "%CUDA_AVAILABLE%"=="1" (
 echo       Installation des autres dependances...
 pip install -r requirements.txt
 
-:: Verifier bitsandbytes (Windows peut avoir des problemes)
+:: Verifier bitsandbytes
 echo.
-echo [5/5] Verification de bitsandbytes...
+echo [4/4] Verification de bitsandbytes...
 python -c "import bitsandbytes" >nul 2>&1
 if errorlevel 1 (
     echo       [INFO] bitsandbytes non disponible - quantization desactivee
@@ -101,7 +78,6 @@ echo.
 echo Pour lancer l'application:
 echo    1. Double-cliquez sur launch.bat
 echo    OU
-echo    2. Activez venv: venv\Scripts\activate
-echo       Puis: streamlit run app.py
+echo    2. streamlit run app.py
 echo.
 pause
